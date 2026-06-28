@@ -1,0 +1,30 @@
+{
+  "period": "2025-W40-base",
+  "forecast_base_eur_mwh": 83.7,
+  "confidence_band": [
+    45.8,
+    118.52
+  ],
+  "band_width_eur_mwh": 72.72,
+  "direction": "neutral",
+  "peak_spread": {
+    "peak_vs_base_spread_eur_mwh": 20.58,
+    "action": "buy peak vs base"
+  },
+  "reasoning": [
+    "No current prompt price provided; cannot compute directional signal",
+    "Peak/base spread forecast: 20.6 EUR/MWh \u2192 buy peak vs base"
+  ],
+  "invalidation_conditions": [
+    "Unplanned nuclear outage (>1 GW) announcement within 4 hours of gate closure",
+    "Extreme cold snap (load +15% vs forecast) not captured in fundamentals",
+    "Wind drought: generation <30% of installed capacity for \u22653 consecutive days",
+    "Cross-border congestion causing price zone split from NL/FR >\u20ac20/MWh",
+    "Model out-of-sample MAE > 2\u00d7 training MAE (57 EUR/MWh) \u2192 reduce position to 0"
+  ],
+  "desk_actions": [
+    "Express directional bias via prompt month baseload futures (EEX)",
+    "Express shape via peak/offpeak spread products (EEX Peak/Offpeak)",
+    "Size position by band_width: narrower band \u2192 larger position"
+  ]
+}

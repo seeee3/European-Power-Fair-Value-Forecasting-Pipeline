@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+# Data files (large, auto-fetched on first run)
+data/raw/*.csv
+data/raw/*.parquet
+data/processed/*.csv
+data/processed/*.parquet
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/
