@@ -16,12 +16,12 @@ FIGURES = OUTPUTS / "figures"
 
 @dataclass
 class Config:
-    openai_api_key: str
+    anthropic_api_key: str
     entsoe_api_key: str
     market: str
     start_date: str
     end_date: str
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "claude-haiku-4-5"
     random_seed: int = 42
     cv_folds: int = 12
     test_months: int = 3
@@ -30,7 +30,7 @@ class Config:
     def from_env(cls) -> "Config":
         load_dotenv()
         return cls(
-            openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             entsoe_api_key=os.environ.get("ENTSOE_API_KEY", ""),
             market=os.environ.get("MARKET", "DE"),
             start_date=os.environ.get("START_DATE", "2022-01-01"),
@@ -38,8 +38,8 @@ class Config:
         )
 
     def validate(self) -> None:
-        if not self.openai_api_key:
-            raise ValueError("OPENAI_API_KEY is required for the LLM QA component")
+        if not self.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required for the LLM QA component")
 
 
 def ensure_dirs() -> None:

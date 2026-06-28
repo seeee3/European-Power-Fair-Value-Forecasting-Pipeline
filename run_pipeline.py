@@ -10,9 +10,9 @@ def main() -> None:
     config = Config.from_env()
 
     # Validate only what is strictly required
-    if not config.openai_api_key:
+    if not config.anthropic_api_key:
         print(
-            "WARNING: OPENAI_API_KEY not set — LLM QA step will be skipped.\n"
+            "WARNING: ANTHROPIC_API_KEY not set — LLM QA step will be skipped.\n"
             "Add it to .env to enable AI-accelerated QA rule generation.",
             file=sys.stderr,
         )

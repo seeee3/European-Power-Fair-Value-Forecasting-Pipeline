@@ -13,7 +13,7 @@ End-to-end prototype for the Cobblestone Energy Graduate ADE case study:
 |------|--------|-------------|
 | 1 | `ingestion/` | Hourly DE DA prices + wind/solar/load from SMARD (no key) or ENTSO-E |
 | 2a | `quality/standard_qa.py` | Missingness, duplicates, hourly gaps, domain-bound outliers |
-| 2b | `quality/llm_qa.py` | **AI component**: GPT-4o-mini proposes & executes domain-specific QA rules |
+| 2b | `quality/llm_qa.py` | **AI component**: Claude proposes & executes domain-specific QA rules |
 | 3 | `features/engineer.py` | Calendar, lag, rolling, and fundamental features (strict leakage control) |
 | 4 | `models/` | Seasonal naive baseline + LightGBM with walk-forward CV |
 | 5 | `curve/translation.py` | Hourly forecasts → Base/Peak blocks → prompt curve trading signal |
@@ -31,7 +31,7 @@ pip install -e ".[notebook]"
 
 # 3. Configure API keys
 cp .env.example .env
-# Edit .env:  add OPENAI_API_KEY (required for LLM QA)
+# Edit .env:  add ANTHROPIC_API_KEY (required for LLM QA)
 #             add ENTSOE_API_KEY (optional; falls back to SMARD)
 ```
 
@@ -46,6 +46,29 @@ python run_pipeline.py
 # First run fetches ~4 years of hourly data from SMARD (~30s–2min depending on network).
 # Subsequent runs load from data/raw/de_power_market.parquet (instant).
 ```
+
+### Interactive Dashboard
+
+After running the pipeline, launch the Streamlit dashboard to explore all outputs interactively:
+
+```bash
+streamlit run app.py
+```
+
+The dashboard has six tabs:
+
+| Tab | What it shows |
+|-----|---------------|
+| **Overview** | Pipeline summary, dataset metadata, data source table |
+| **Data Quality** | Standard QA report (missing %, outliers, gaps) + LLM-generated rule results |
+| **Model** | Walk-forward CV metrics table, hold-out test performance, CV and feature-importance figures |
+| **Trading Signal** | Directional signal, confidence band, peak/base spread, desk actions and invalidation conditions |
+| **Forecast** | Interactive daily chart of Oct–Dec 2025 predictions with 80% prediction interval; download button for `submission.csv` |
+| **Figures** | All five publication figures rendered side-by-side |
+
+The sidebar shows a live summary: dataset date range, LightGBM test MAE, and the current directional signal (long / short / neutral).
+
+---
 
 ### Outputs
 
@@ -137,18 +160,18 @@ chronologically. No data from the validation month touches training.
 
 `src/cobblestone/quality/llm_qa.py`
 
-GPT-4o-mini is called **from code** (not manually) to propose validation rules
+Claude (`claude-haiku-4-5`) is called to propose validation rules
 for the power market dataset:
 
 1. The pipeline constructs a schema description (column stats + 5 sample rows)
 2. A system prompt explains the DE power market context and asks for
    domain-specific JSON rules (physical limits, market realism, temporal jumps)
-3. GPT-4o-mini returns 8–12 rules as structured JSON
+3. Claude returns 8–12 rules as structured JSON
 4. The pipeline executes each rule against the full dataset using `eval()`
 5. All prompts, raw responses, parsed rules, execution results, and
    any failures are written to `outputs/llm_qa_log.json`
 
-**No API key is ever committed** — it is read from the `OPENAI_API_KEY`
+API key is read from the `ANTHROPIC_API_KEY`
 environment variable (`.env` file is in `.gitignore`).
 
 ---

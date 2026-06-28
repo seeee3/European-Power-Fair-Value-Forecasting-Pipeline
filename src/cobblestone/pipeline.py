@@ -73,8 +73,8 @@ class Pipeline:
         console.print(f"  QA report → {QA_REPORT}")
 
         # LLM-driven QA
-        if not self.config.openai_api_key:
-            console.print("  [yellow]Skipping LLM QA — OPENAI_API_KEY not set[/yellow]")
+        if not self.config.anthropic_api_key:
+            console.print("  [yellow]Skipping LLM QA — ANTHROPIC_API_KEY not set[/yellow]")
             return
 
         console.print("  Running LLM QA rule generation...")
@@ -82,7 +82,7 @@ class Pipeline:
         sample_df = df.tail(24 * 30)
         llm_report = llm_qa.run_llm_qa(
             sample_df,
-            api_key=self.config.openai_api_key,
+            api_key=self.config.anthropic_api_key,
             model=self.config.llm_model,
             log_path=LLM_QA_LOG,
         )

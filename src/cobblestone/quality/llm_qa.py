@@ -1,5 +1,5 @@
 """
-AI-accelerated QA: GPT-4o-mini proposes domain-aware validation rules,
+AI-accelerated QA: Claude proposes domain-aware validation rules,
 the pipeline executes them, and all prompts/outputs/failures are logged.
 
 This satisfies the case study requirement:
@@ -114,7 +114,7 @@ def _execute_rule(df: pd.DataFrame, rule: dict[str, Any]) -> dict[str, Any]:
 def run_llm_qa(
     df: pd.DataFrame,
     api_key: str,
-    model: str = "gpt-4o-mini",
+    model: str = "claude-haiku-4-5",
     log_path: Path | None = None,
 ) -> dict[str, Any]:
     """
@@ -130,9 +130,9 @@ def run_llm_qa(
             "summary":  {...},
         }
     """
-    from openai import OpenAI
+    import anthropic
 
-    client = OpenAI(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key)
     user_prompt = _build_user_prompt(df)
 
     log: dict[str, Any] = {
@@ -150,21 +150,20 @@ def run_llm_qa(
     # ── Call the LLM ──────────────────────────────────────────────────────────
     logger.info("Calling %s for QA rule generation...", model)
     try:
-        response = client.chat.completions.create(
+        response = client.messages.create(
             model=model,
+            system=SYSTEM_PROMPT,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
             max_tokens=2000,
-            response_format={"type": "json_object"},
         )
-        raw = response.choices[0].message.content or ""
+        raw = response.content[0].text if response.content else ""
         log["raw_response"] = raw
         log["usage"] = {
-            "prompt_tokens": response.usage.prompt_tokens if response.usage else None,
-            "completion_tokens": response.usage.completion_tokens if response.usage else None,
+            "input_tokens": response.usage.input_tokens if response.usage else None,
+            "output_tokens": response.usage.output_tokens if response.usage else None,
         }
         logger.info("LLM response received (%d chars)", len(raw))
     except Exception as exc:
@@ -175,7 +174,12 @@ def run_llm_qa(
 
     # ── Parse rules ───────────────────────────────────────────────────────────
     try:
-        parsed = json.loads(raw)
+        # Strip markdown fences if the model wraps the JSON
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            stripped = "\n".join(stripped.split("\n")[1:])
+            stripped = stripped.rsplit("```", 1)[0].strip()
+        parsed = json.loads(stripped)
         # Model may return {"rules": [...]} or just [...]
         rules_list = parsed if isinstance(parsed, list) else parsed.get("rules", [])
         log["rules"] = rules_list

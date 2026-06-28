@@ -60,7 +60,7 @@ Standard QA checks are implemented in `src/cobblestone/quality/standard_qa.py` a
 
 **Implementation:** `src/cobblestone/quality/llm_qa.py`
 
-GPT-4o-mini is called programmatically to propose domain-aware validation rules for the power market dataset. The pipeline:
+Claude (`claude-haiku-4-5`) is called programmatically to propose domain-aware validation rules for the power market dataset. The pipeline:
 
 1. Constructs a schema description (dtype, min, max, mean, std + 5 sample rows)
 2. Sends a structured system prompt instructing the LLM to return 8–12 validation rules as JSON, covering physical feasibility, market realism, temporal consistency, and cross-series sanity
@@ -68,7 +68,7 @@ GPT-4o-mini is called programmatically to propose domain-aware validation rules 
 4. Evaluates each rule against the full dataset using `eval()` on a `pd.Series`
 5. Logs: timestamp, model, full system prompt, raw response, parsed rules, per-rule results (violations count + fraction), and any errors
 
-All logs are written to `outputs/llm_qa_log.json`. The API key is read from `OPENAI_API_KEY` in `.env` — never committed to source control.
+All logs are written to `outputs/llm_qa_log.json`. The API key is read from `ANTHROPIC_API_KEY` in `.env` 
 
 ---
 
@@ -189,9 +189,9 @@ The LLM QA component is called **programmatically from code** — not as a manua
 
 **Controls:**
 - `temperature=0.2` for reproducible rule generation
-- `response_format={"type": "json_object"}` enforces structured output
+- System prompt explicitly instructs JSON-only output; markdown fences are stripped defensively
 - Rules are executed via Python `eval()` on an isolated `pd.Series` (no write access to the DataFrame)
-- API key via `OPENAI_API_KEY` environment variable, never in source
+- API key via `ANTHROPIC_API_KEY` environment variable, never in source
 
 ---
 
@@ -200,6 +200,7 @@ The LLM QA component is called **programmatically from code** — not as a manua
 ```
 cobblestone/
 ├── run_pipeline.py              # Single entry point
+├── app.py                       # Streamlit dashboard
 ├── pyproject.toml / requirements.txt
 ├── .env.example                 # API key template
 ├── data/raw/                    # Cached SMARD parquet (auto-generated)
@@ -222,8 +223,22 @@ cobblestone/
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[notebook]"
-cp .env.example .env  # add OPENAI_API_KEY
-python run_pipeline.py
+cp .env.example .env  # add ANTHROPIC_API_KEY
+python run_pipeline.py       # generates all outputs
+streamlit run app.py         # launch interactive dashboard
 ```
 
 Outputs are regenerated on each run. Data is cached after the first fetch.
+
+### Streamlit Dashboard (`app.py`)
+
+A six-tab Streamlit app reads the pipeline outputs and presents them interactively:
+
+- **Overview** — dataset metadata, source table, and pipeline step summary
+- **Data Quality** — standard QA report (missing %, outliers, hourly gaps) and the LLM-generated rule results table with pass/fail counts
+- **Model** — CV metrics, hold-out test performance, CV fold chart (Fig 2), and feature-importance chart (Fig 3)
+- **Trading Signal** — directional signal badge, fair-value band, peak/base spread, desk actions, and invalidation conditions; full delivery-period base/peak/offpeak table
+- **Forecast** — interactive daily chart of Oct–Dec 2025 predictions with 80% prediction interval shading; one-click `submission.csv` download
+- **Figures** — all five publication figures rendered in sequence
+
+The sidebar provides a persistent summary: date range, LightGBM test MAE, and the live directional signal colour-coded long/short/neutral.
