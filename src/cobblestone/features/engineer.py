@@ -16,7 +16,6 @@ _DE_FIXED_HOLIDAYS = {
 
 
 def _is_de_holiday(dt: pd.DatetimeIndex) -> np.ndarray:
-    md = {(m, d) for m, d in zip(dt.month, dt.day)}
     return np.array([(m, d) in _DE_FIXED_HOLIDAYS for m, d in zip(dt.month, dt.day)])
 
 
@@ -107,17 +106,3 @@ def build_feature_matrix(df: pd.DataFrame, target_col: str = "price_da_eur_mwh")
     return X[valid], y[valid]
 
 
-FEATURE_DESCRIPTIONS: dict[str, str] = {
-    "hour": "Hour of day (0–23, CET/CEST)",
-    "dow": "Day of week (0=Mon, 6=Sun)",
-    "month": "Calendar month",
-    "is_weekend": "Weekend flag",
-    "is_holiday": "German public holiday flag",
-    "price_lag_24h": "Day-ahead price 24 h prior",
-    "price_lag_168h": "Day-ahead price 1 week prior (same hour)",
-    "price_roll_168h_mean": "7-day rolling average price",
-    "wind_total_lag24": "Total wind generation 24 h prior",
-    "solar_mwh_lag24": "Solar generation 24 h prior",
-    "load_mwh_lag24": "Grid load 24 h prior",
-    "renewables_total_lag24": "Total renewables 24 h prior",
-}

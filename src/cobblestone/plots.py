@@ -88,7 +88,7 @@ def fig_feature_importance(importances: pd.Series, out: Path, top_n: int = 20) -
     """Figure 3: Top-N feature importances from LightGBM."""
     top = importances.head(top_n)
     fig, ax = plt.subplots(figsize=(8, top_n * 0.35 + 1))
-    bars = ax.barh(top.index[::-1], top.values[::-1], color=PALETTE[0], alpha=0.85)
+    ax.barh(top.index[::-1], top.values[::-1], color=PALETTE[0], alpha=0.85)
     ax.set_xlabel("Feature Importance (gain)")
     ax.set_title(f"LightGBM Top {top_n} Feature Importances")
     fig.tight_layout()

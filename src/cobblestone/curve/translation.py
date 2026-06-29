@@ -207,8 +207,10 @@ def generate_trading_signal(
     return {
         "period": primary.period_label,
         "forecast_base_eur_mwh": primary.forecast_mean,
+        "current_prompt_price_eur_mwh": round(current_prompt_price, 2) if current_prompt_price is not None else None,
         "confidence_band": [primary.forecast_p10, primary.forecast_p90],
         "band_width_eur_mwh": round(band_width, 2),
+        "model_mae_threshold_eur_mwh": round(model_mae, 2),
         "direction": direction,
         "peak_spread": peak_spread_signal,
         "reasoning": reasoning,

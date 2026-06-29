@@ -43,6 +43,10 @@ SYSTEM_PROMPT = textwrap.dedent("""
       - Cross-series sanity (high wind => typically lower prices)
 
     Rules MUST be executable Python expressions. Do not use custom functions.
+    IMPORTANT: Each rule receives only ONE column via `s`. You cannot reference
+    other columns inside an expression. Do not attempt cross-series checks
+    (e.g. checking wind generation when writing a price rule) — the other
+    column is not in scope. Write univariate rules only.
 """).strip()
 
 

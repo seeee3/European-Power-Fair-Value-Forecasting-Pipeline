@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 RAW_PARQUET = cfg.DATA_RAW / "de_power_market.parquet"
-PROCESSED_PARQUET = cfg.DATA_PROCESSED / "features.parquet"
 QA_REPORT = cfg.OUTPUTS / "qa_report.json"
 LLM_QA_LOG = cfg.OUTPUTS / "llm_qa_log.json"
 SUBMISSION_CSV = cfg.OUTPUTS / "submission.csv"
@@ -39,9 +38,12 @@ class Pipeline:
     def _step_ingest(self) -> pd.DataFrame:
         console.print(Rule("[bold blue]Step 1: Data Ingestion[/bold blue]"))
 
-        if RAW_PARQUET.exists():
+        if RAW_PARQUET.exists() and not self.config.force_refetch:
             console.print(f"  Loading cached data from {RAW_PARQUET}")
             return pd.read_parquet(RAW_PARQUET)
+
+        if RAW_PARQUET.exists() and self.config.force_refetch:
+            console.print("  [yellow]force_refetch=True — ignoring cache, re-fetching from source[/yellow]")
 
         if self.config.entsoe_api_key:
             console.print("  Source: ENTSO-E Transparency Platform")
@@ -133,7 +135,6 @@ class Pipeline:
             with open(QA_REPORT, "w") as f:
                 json.dump(qa, f, indent=2, default=str)
 
-        X.to_parquet(PROCESSED_PARQUET)
         return X, y
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -225,9 +226,7 @@ class Pipeline:
         return forecaster, lgbm_preds, baseline_preds
 
     # ─────────────────────────────────────────────────────────────────────────
-    def _step_curve(
-        self, forecaster: PowerPriceForecaster, X_future: pd.DataFrame | None
-    ) -> None:
+    def _step_curve(self, forecaster: PowerPriceForecaster) -> None:
         console.print(Rule("[bold blue]Step 5: Prompt Curve Translation[/bold blue]"))
 
         # Use the most recent month of test-set predictions as the "future" view
@@ -263,11 +262,30 @@ class Pipeline:
         except Exception:
             pass
 
-        signal = curve.generate_trading_signal(all_views, model_mae=cv_mae_approx)
+        # Derive a reference "current prompt price" from the 30-day realized average
+        # immediately preceding the forecast window.  In a live system this would come
+        # from EEX/ICIS screen prices; here we use trailing actuals as a proxy.
+        prompt_price: float | None = None
+        if RAW_PARQUET.exists():
+            try:
+                raw_prices = pd.read_parquet(RAW_PARQUET)["price_da_eur_mwh"]
+                test_start = y_pred.index.min()
+                prior = raw_prices.loc[:test_start - pd.Timedelta(hours=1)].dropna()
+                if len(prior) >= 720:
+                    prompt_price = round(float(prior.iloc[-720:].mean()), 2)
+                    logger.info("Prompt price proxy (30-day trailing mean): %.2f EUR/MWh", prompt_price)
+            except Exception as exc:
+                logger.warning("Could not compute prompt price proxy: %s", exc)
+
+        signal = curve.generate_trading_signal(
+            all_views, model_mae=cv_mae_approx, current_prompt_price=prompt_price
+        )
 
         console.print("\n  [bold]Trading Signal[/bold]")
         console.print(f"    Period:     {signal['period']}")
         console.print(f"    Fair value: {signal['forecast_base_eur_mwh']:.1f} EUR/MWh")
+        if prompt_price is not None:
+            console.print(f"    Prompt ref: {prompt_price:.1f} EUR/MWh (30-day trailing avg)")
         console.print(f"    Band:       [{signal['confidence_band'][0]:.1f}, {signal['confidence_band'][1]:.1f}]")
         console.print(f"    Direction:  [bold]{signal['direction'].upper()}[/bold]")
         for r in signal["reasoning"]:
@@ -295,7 +313,7 @@ class Pipeline:
         self._step_qa(df_raw)
         X, y = self._step_features(df_raw)
         forecaster, lgbm_preds, baseline_preds = self._step_model(X, y, df_raw)
-        self._step_curve(forecaster, None)
+        self._step_curve(forecaster)
 
         console.print(Rule("[bold green]Pipeline complete[/bold green]"))
         console.print(f"  Outputs: {cfg.OUTPUTS}")

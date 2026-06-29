@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
 import pandas as pd
 import requests
@@ -27,20 +26,6 @@ ENTSOE_BASE = "https://web-api.tp.entsoe.eu/api"
 EIC = {
     "DE_LU": "10Y1001A1001A82H",   # Germany-Luxembourg bidding zone
     "DE":    "10YDE-VE-------2",    # Germany (DE control area)
-}
-
-# Document types for the ENTSO-E REST API
-DOC_TYPES = {
-    "day_ahead_prices":         "A44",
-    "actual_load":              "A65",
-    "actual_generation_wind":   "A75",
-    "actual_generation_solar":  "A75",
-}
-
-# Process types
-PROCESS = {
-    "realised": "A16",
-    "day_ahead": "A01",
 }
 
 
@@ -58,14 +43,31 @@ class EntsoEClient:
         return r.content
 
     def _parse_xml_timeseries(self, xml_bytes: bytes, col: str) -> pd.Series:
-        """Parse ENTSO-E XML envelope into a pandas Series."""
-        try:
-            import xml.etree.ElementTree as ET
-        except ImportError:
-            raise RuntimeError("xml.etree.ElementTree is required")
+        """
+        Parse ENTSO-E XML envelope into a pandas Series.
 
-        ns = {"ns": "urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3"}
+        The namespace is extracted dynamically from the root element so this
+        works for all ENTSO-E document types (A44 uses
+        publicationdocument:7:3, A65/A75 use generationdocument:5:0, etc.).
+        """
+        import xml.etree.ElementTree as ET
+
         root = ET.fromstring(xml_bytes)
+
+        # Detect namespace from root tag: {urn:...}ElementName
+        tag = root.tag
+        if tag.startswith("{"):
+            ns_uri = tag[1:tag.index("}")]
+            ns = {"ns": ns_uri}
+        else:
+            ns = {}
+
+        # Log an API-level error message if the response is a rejection
+        reason = root.findtext(".//ns:Reason/ns:text", namespaces=ns) or \
+                 root.findtext(".//Reason/text")
+        if reason:
+            logger.warning("ENTSO-E API returned a reason message for %s: %s", col, reason)
+
         rows = []
         for ts_elem in root.findall(".//ns:TimeSeries", ns):
             period = ts_elem.find("ns:Period", ns)
@@ -77,7 +79,6 @@ class EntsoEClient:
                 continue
 
             start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-            # Map PT60M / PT15M to pandas offsets
             offset_map = {"PT60M": "h", "PT30M": "30min", "PT15M": "15min"}
             freq = offset_map.get(resolution_str, "h")
 
@@ -91,6 +92,7 @@ class EntsoEClient:
                 rows.append((idx, float(val)))
 
         if not rows:
+            logger.warning("No data rows parsed from ENTSO-E response for %s", col)
             return pd.Series(dtype=float, name=col)
 
         s = pd.Series(
@@ -103,6 +105,7 @@ class EntsoEClient:
     def day_ahead_prices(self, start: datetime, end: datetime) -> pd.Series:
         params = {
             "documentType": "A44",
+            "contract_MarketAgreement.type": "A01",
             "in_Domain": EIC["DE_LU"],
             "out_Domain": EIC["DE_LU"],
             "periodStart": start.strftime("%Y%m%d%H%M"),
@@ -141,33 +144,82 @@ class EntsoEClient:
         return self._parse_xml_timeseries(xml, col)
 
 
+def _year_chunks(start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+    """
+    Split [start, end] into chunks of at most 1 year (365 days).
+    ENTSO-E rejects requests spanning more than one year per call.
+    """
+    chunks = []
+    cursor = start
+    while cursor < end:
+        chunk_end = min(
+            datetime(cursor.year + 1, 1, 1, tzinfo=cursor.tzinfo) - pd.Timedelta(hours=1),
+            end,
+        )
+        chunks.append((cursor, chunk_end))
+        cursor = datetime(cursor.year + 1, 1, 1, tzinfo=cursor.tzinfo)
+    return chunks
+
+
+def _fetch_chunked(
+    fn,
+    start: datetime,
+    end: datetime,
+    col: str,
+) -> pd.Series:
+    """Call `fn(chunk_start, chunk_end)` for each annual chunk and concatenate."""
+    parts: list[pd.Series] = []
+    for chunk_start, chunk_end in _year_chunks(start, end):
+        logger.info("  chunk %s → %s", chunk_start.date(), chunk_end.date())
+        try:
+            part = fn(chunk_start, chunk_end)
+            if len(part):
+                parts.append(part)
+        except Exception as exc:
+            logger.error("  chunk failed (%s → %s): %s", chunk_start.date(), chunk_end.date(), exc)
+    if not parts:
+        return pd.Series(dtype=float, name=col)
+    combined = pd.concat(parts).sort_index()
+    return combined[~combined.index.duplicated(keep="first")]
+
+
 def fetch_dataset(api_key: str, start: str, end: str) -> pd.DataFrame:
-    """Fetch all required ENTSO-E series and return a merged hourly DataFrame."""
+    """
+    Fetch all required ENTSO-E series and return a merged hourly DataFrame.
+    Requests are split into annual chunks — the API rejects ranges > 1 year.
+    """
     client = EntsoEClient(api_key)
     start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
     end_dt = datetime.fromisoformat(end).replace(hour=23, tzinfo=timezone.utc)
 
     series: dict[str, pd.Series] = {}
 
-    logger.info("Fetching ENTSO-E day-ahead prices (DE-LU)")
-    series["price_da_eur_mwh"] = client.day_ahead_prices(start_dt, end_dt)
-
-    logger.info("Fetching ENTSO-E actual load")
-    series["load_mwh"] = client.actual_load(start_dt, end_dt)
-
-    logger.info("Fetching ENTSO-E wind onshore generation")
-    series["wind_onshore_mwh"] = client.actual_generation_by_type(
-        start_dt, end_dt, "B19", "wind_onshore_mwh"
+    logger.info("Fetching ENTSO-E day-ahead prices (DE-LU) in annual chunks")
+    series["price_da_eur_mwh"] = _fetch_chunked(
+        client.day_ahead_prices, start_dt, end_dt, "price_da_eur_mwh"
     )
 
-    logger.info("Fetching ENTSO-E wind offshore generation")
-    series["wind_offshore_mwh"] = client.actual_generation_by_type(
-        start_dt, end_dt, "B18", "wind_offshore_mwh"
+    logger.info("Fetching ENTSO-E actual load in annual chunks")
+    series["load_mwh"] = _fetch_chunked(
+        client.actual_load, start_dt, end_dt, "load_mwh"
     )
 
-    logger.info("Fetching ENTSO-E solar generation")
-    series["solar_mwh"] = client.actual_generation_by_type(
-        start_dt, end_dt, "B16", "solar_mwh"
+    logger.info("Fetching ENTSO-E wind onshore generation in annual chunks")
+    series["wind_onshore_mwh"] = _fetch_chunked(
+        lambda s, e: client.actual_generation_by_type(s, e, "B19", "wind_onshore_mwh"),
+        start_dt, end_dt, "wind_onshore_mwh",
+    )
+
+    logger.info("Fetching ENTSO-E wind offshore generation in annual chunks")
+    series["wind_offshore_mwh"] = _fetch_chunked(
+        lambda s, e: client.actual_generation_by_type(s, e, "B18", "wind_offshore_mwh"),
+        start_dt, end_dt, "wind_offshore_mwh",
+    )
+
+    logger.info("Fetching ENTSO-E solar generation in annual chunks")
+    series["solar_mwh"] = _fetch_chunked(
+        lambda s, e: client.actual_generation_by_type(s, e, "B16", "solar_mwh"),
+        start_dt, end_dt, "solar_mwh",
     )
 
     df = pd.DataFrame(series)

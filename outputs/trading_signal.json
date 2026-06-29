@@ -1,26 +1,28 @@
 {
-  "period": "2025-W40-base",
-  "forecast_base_eur_mwh": 83.7,
+  "period": "2025-W15-base",
+  "forecast_base_eur_mwh": 69.67,
+  "current_prompt_price_eur_mwh": 86.44,
   "confidence_band": [
-    45.8,
-    118.52
+    31.4,
+    102.08
   ],
-  "band_width_eur_mwh": 72.72,
+  "band_width_eur_mwh": 70.68,
+  "model_mae_threshold_eur_mwh": 18.81,
   "direction": "neutral",
   "peak_spread": {
-    "peak_vs_base_spread_eur_mwh": 20.58,
-    "action": "buy peak vs base"
+    "peak_vs_base_spread_eur_mwh": 4.79,
+    "action": "hold"
   },
   "reasoning": [
-    "No current prompt price provided; cannot compute directional signal",
-    "Peak/base spread forecast: 20.6 EUR/MWh \u2192 buy peak vs base"
+    "Forecast 69.7 within \u00b1MAE of prompt 86.4 \u2192 no directional edge",
+    "Peak/base spread forecast: 4.8 EUR/MWh \u2192 hold"
   ],
   "invalidation_conditions": [
     "Unplanned nuclear outage (>1 GW) announcement within 4 hours of gate closure",
     "Extreme cold snap (load +15% vs forecast) not captured in fundamentals",
     "Wind drought: generation <30% of installed capacity for \u22653 consecutive days",
     "Cross-border congestion causing price zone split from NL/FR >\u20ac20/MWh",
-    "Model out-of-sample MAE > 2\u00d7 training MAE (57 EUR/MWh) \u2192 reduce position to 0"
+    "Model out-of-sample MAE > 2\u00d7 training MAE (38 EUR/MWh) \u2192 reduce position to 0"
   ],
   "desk_actions": [
     "Express directional bias via prompt month baseload futures (EEX)",

@@ -25,6 +25,7 @@ class Config:
     random_seed: int = 42
     cv_folds: int = 12
     test_months: int = 3
+    force_refetch: bool = False
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -35,12 +36,8 @@ class Config:
             market=os.environ.get("MARKET", "DE"),
             start_date=os.environ.get("START_DATE", "2022-01-01"),
             end_date=os.environ.get("END_DATE", "2025-12-31"),
+            force_refetch=os.environ.get("FORCE_REFETCH", "false").lower() == "true",
         )
-
-    def validate(self) -> None:
-        if not self.anthropic_api_key:
-            raise ValueError("ANTHROPIC_API_KEY is required for the LLM QA component")
-
 
 def ensure_dirs() -> None:
     for d in (DATA_RAW, DATA_PROCESSED, OUTPUTS, FIGURES):

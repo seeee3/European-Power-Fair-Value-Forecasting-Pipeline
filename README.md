@@ -33,6 +33,7 @@ pip install -e ".[notebook]"
 cp .env.example .env
 # Edit .env:  add ANTHROPIC_API_KEY (required for LLM QA)
 #             add ENTSOE_API_KEY (optional; falls back to SMARD)
+#             set FORCE_REFETCH=true to bypass cached data and re-fetch from source
 ```
 
 ---
@@ -109,11 +110,13 @@ Register at: https://transparency.entsoe.eu/usrm/user/createPublicUser
 
 | Series | Document type | Domain |
 |--------|---------------|--------|
-| DA prices | A44 | DE-LU (10Y1001A1001A82H) |
+| DA prices | A44 + `contract_MarketAgreement.type=A01` | DE-LU (10Y1001A1001A82H) |
 | Actual load | A65 | DE-LU |
 | Wind onshore | A75 / B19 | DE-LU |
 | Wind offshore | A75 / B18 | DE-LU |
 | Solar | A75 / B16 | DE-LU |
+
+**Note:** The ENTSO-E API limits each request to **one calendar year**. The client (`entsoe_client.py`) automatically splits multi-year date ranges into annual chunks. To switch from SMARD to ENTSO-E on an existing installation, set `FORCE_REFETCH=true` in `.env` for the first run, then revert to `false`.
 
 Full Postman documentation: see `docs/entsoe_postman.json`
 

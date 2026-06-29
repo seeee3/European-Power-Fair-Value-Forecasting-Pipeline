@@ -1,155 +1,166 @@
 {
-  "timestamp": "2026-06-28T13:35:42.724124+00:00",
+  "timestamp": "2026-06-29T16:13:45.225326+00:00",
   "model": "claude-haiku-4-5",
-  "system_prompt": "You are a quantitative analyst at a European energy trading desk.\nYou will receive a description of a power market dataset (schema, statistics,\nand sample rows) and must return a JSON array of validation rules.\n\nEach rule must have these fields:\n  \"name\"        : unique snake_case identifier\n  \"description\" : one-sentence explanation of what it checks\n  \"column\"      : which DataFrame column it applies to (or \"index\")\n  \"severity\"    : \"error\" | \"warning\"\n  \"expression\"  : a Python expression using variable `s` (a pd.Series of the column values,\n                  already dropna applied) that evaluates to a boolean Series.\n                  True = row passes the check.  Example: `s > 0`\n\nReturn ONLY a JSON array with no commentary before or after.\nGenerate 8-12 rules covering:\n  - Physical feasibility (generation cannot be negative; load has realistic bounds)\n  - Market realism (price spikes and crashes; negative prices ARE valid in DE market)\n  - Temporal consistency (large jumps between consecutive hours)\n  - Cross-series sanity (high wind => typically lower prices)\n\nRules MUST be executable Python expressions. Do not use custom functions.",
-  "user_prompt": "Dataset: Hourly European power market data for Germany (DE-LU bidding zone).\n        Index: UTC hourly timestamps.\n\n        Schema and statistics:\n          price_da_eur_mwh: dtype=float64, non_null=720, min=3.52, max=308.35, mean=93.46, std=30.01\n  wind_onshore_mwh: dtype=float64, non_null=720, min=3695.61, max=4967.76, mean=4332.88, std=292.06\n  solar_mwh: dtype=float64, non_null=720, min=676.79, max=37726.59, mean=16702.88, std=8724.46\n  load_mwh: dtype=float64, non_null=0, min=nan, max=nan, mean=nan, std=nan\n\n        Sample rows (first 5):\n                    utc_timestamp  price_da_eur_mwh  wind_onshore_mwh  solar_mwh  load_mwh\n2025-12-02 00:00:00+00:00           58.8200           3742.38   27972.52       NaN\n2025-12-02 01:00:00+00:00           54.9350           3727.32   27533.51       NaN\n2025-12-02 02:00:00+00:00           53.7325           3730.23   27606.55       NaN\n2025-12-02 03:00:00+00:00           50.4675           3787.65   27734.91       NaN\n2025-12-02 04:00:00+00:00           64.5850           3834.61   28146.02       NaN\n\n        Please generate validation rules for this dataset.",
-  "raw_response": "```json\n[\n  {\n    \"name\": \"wind_onshore_non_negative\",\n    \"description\": \"Wind onshore generation cannot be negative.\",\n    \"column\": \"wind_onshore_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= 0\"\n  },\n  {\n    \"name\": \"solar_non_negative\",\n    \"description\": \"Solar generation cannot be negative.\",\n    \"column\": \"solar_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= 0\"\n  },\n  {\n    \"name\": \"price_reasonable_bounds\",\n    \"description\": \"Day-ahead price should stay within realistic market bounds (-500 to 500 EUR/MWh).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s >= -500) & (s <= 500)\"\n  },\n  {\n    \"name\": \"wind_onshore_within_capacity\",\n    \"description\": \"Wind onshore generation should not exceed typical German installed capacity of ~35 GW.\",\n    \"column\": \"wind_onshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s <= 35000\"\n  },\n  {\n    \"name\": \"solar_within_capacity\",\n    \"description\": \"Solar generation should not exceed typical German installed capacity of ~15 GW.\",\n    \"column\": \"solar_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s <= 15000\"\n  },\n  {\n    \"name\": \"price_hourly_jump_limit\",\n    \"description\": \"Day-ahead price should not jump more than 150 EUR/MWh between consecutive hours.\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s.diff().abs() <= 150\"\n  },\n  {\n    \"name\": \"wind_hourly_ramp_limit\",\n    \"description\": \"Wind onshore generation should not ramp more than 1500 MWh per hour.\",\n    \"column\": \"wind_onshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s.diff().abs() <= 1500\"\n  },\n  {\n    \"name\": \"solar_hourly_ramp_limit\",\n    \"description\": \"Solar generation should not ramp more than 3000 MWh per hour (accounting for cloud cover changes).\",\n    \"column\": \"solar_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s.diff().abs() <= 3000\"\n  },\n  {\n    \"name\": \"high_wind_low_price_correlation\",\n    \"description\": \"When wind generation is above 4500 MWh, price should typically be below 120 EUR/MWh.\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.index.to_series().index.isin(s.index[s.index.get_level_values(0).isin(s.index)])) | (s <= 120)\"\n  },\n  {\n    \"name\": \"solar_night_hours_zero\",\n    \"description\": \"Solar generation during night hours (22:00-05:00 UTC) should be minimal (< 500 MWh).\",\n    \"column\": \"solar_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"((s.index.hour >= 5) & (s.index.hour < 22)) | (s < 500)\"\n  },\n  {\n    \"name\": \"price_not_extreme_outlier\",\n    \"description\": \"Price should not deviate more than 4 standard deviations from mean (extreme outlier detection).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s - 93.46).abs() <= (4 * 30.01)\"\n  },\n  {\n    \"name\": \"wind_not_extreme_outlier\",\n    \"description\": \"Wind generation should not deviate more than 3 standard deviations from mean.\",\n    \"column\": \"wind_onshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s - 4332.88).abs() <= (3 * 292.06)\"\n  }\n]\n```",
+  "system_prompt": "You are a quantitative analyst at a European energy trading desk.\nYou will receive a description of a power market dataset (schema, statistics,\nand sample rows) and must return a JSON array of validation rules.\n\nEach rule must have these fields:\n  \"name\"        : unique snake_case identifier\n  \"description\" : one-sentence explanation of what it checks\n  \"column\"      : which DataFrame column it applies to (or \"index\")\n  \"severity\"    : \"error\" | \"warning\"\n  \"expression\"  : a Python expression using variable `s` (a pd.Series of the column values,\n                  already dropna applied) that evaluates to a boolean Series.\n                  True = row passes the check.  Example: `s > 0`\n\nReturn ONLY a JSON array with no commentary before or after.\nGenerate 8-12 rules covering:\n  - Physical feasibility (generation cannot be negative; load has realistic bounds)\n  - Market realism (price spikes and crashes; negative prices ARE valid in DE market)\n  - Temporal consistency (large jumps between consecutive hours)\n  - Cross-series sanity (high wind => typically lower prices)\n\nRules MUST be executable Python expressions. Do not use custom functions.\nIMPORTANT: Each rule receives only ONE column via `s`. You cannot reference\nother columns inside an expression. Do not attempt cross-series checks\n(e.g. checking wind generation when writing a price rule) \u2014 the other\ncolumn is not in scope. Write univariate rules only.",
+  "user_prompt": "Dataset: Hourly European power market data for Germany (DE-LU bidding zone).\n        Index: UTC hourly timestamps.\n\n        Schema and statistics:\n          price_da_eur_mwh: dtype=float64, non_null=720, min=4.04, max=332.68, mean=93.48, std=31.49\n  load_mwh: dtype=float64, non_null=720, min=40602.07, max=74602.28, mean=57226.02, std=8980.29\n  wind_onshore_mwh: dtype=float64, non_null=0, min=nan, max=nan, mean=nan, std=nan\n  wind_offshore_mwh: dtype=float64, non_null=720, min=135.66, max=8278.07, mean=4571.74, std=2257.44\n  solar_mwh: dtype=float64, non_null=0, min=nan, max=nan, mean=nan, std=nan\n\n        Sample rows (first 5):\n                    utc_timestamp  price_da_eur_mwh     load_mwh  wind_onshore_mwh  wind_offshore_mwh  solar_mwh\n2025-12-01 23:00:00+00:00         63.340000 54487.531232               NaN         5633.99225        NaN\n2025-12-02 00:00:00+00:00         59.407500 52546.863780               NaN         5830.65500        NaN\n2025-12-02 01:00:00+00:00         54.265000 51835.864757               NaN         6034.25525        NaN\n2025-12-02 02:00:00+00:00         53.708571 52316.345385               NaN         6047.04475        NaN\n2025-12-02 03:00:00+00:00         54.882500 53637.943665               NaN         6134.69075        NaN\n\n        Please generate validation rules for this dataset.",
+  "raw_response": "```json\n[\n  {\n    \"name\": \"price_non_negative\",\n    \"description\": \"Day-ahead price should be non-negative (negative prices are valid in DE but typically rare; flag extreme negatives).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s >= -50\"\n  },\n  {\n    \"name\": \"price_reasonable_upper_bound\",\n    \"description\": \"Day-ahead price should not exceed 500 EUR/MWh under normal market conditions.\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s <= 500\"\n  },\n  {\n    \"name\": \"load_positive\",\n    \"description\": \"Load must be strictly positive.\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s > 0\"\n  },\n  {\n    \"name\": \"load_realistic_bounds\",\n    \"description\": \"Load should remain within realistic bounds for German market (30000-80000 MWh).\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s >= 30000) & (s <= 80000)\"\n  },\n  {\n    \"name\": \"wind_offshore_non_negative\",\n    \"description\": \"Offshore wind generation cannot be negative.\",\n    \"column\": \"wind_offshore_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= 0\"\n  },\n  {\n    \"name\": \"wind_offshore_capacity_bound\",\n    \"description\": \"Offshore wind generation should not exceed 10000 MWh (typical German offshore capacity).\",\n    \"column\": \"wind_offshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s <= 10000\"\n  },\n  {\n    \"name\": \"price_hourly_jump_limit\",\n    \"description\": \"Hour-to-hour price change should not exceed 150 EUR/MWh (extreme volatility check).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s.diff().abs() <= 150\"\n  },\n  {\n    \"name\": \"load_hourly_jump_limit\",\n    \"description\": \"Hour-to-hour load change should not exceed 5000 MWh (physical ramp constraint).\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s.diff().abs() <= 5000\"\n  },\n  {\n    \"name\": \"wind_offshore_hourly_jump_limit\",\n    \"description\": \"Hour-to-hour offshore wind change should not exceed 2000 MWh (weather ramp constraint).\",\n    \"column\": \"wind_offshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s.diff().abs() <= 2000\"\n  },\n  {\n    \"name\": \"price_not_extreme_spike\",\n    \"description\": \"Price should not spike above 400 EUR/MWh more than once per week (extreme scarcity event).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s <= 400) | (s.rolling(window=168, min_periods=1).apply(lambda x: (x > 400).sum()) <= 1)\"\n  },\n  {\n    \"name\": \"wind_offshore_not_constant\",\n    \"description\": \"Offshore wind should show variability; constant values for >24 hours suggest data error.\",\n    \"column\": \"wind_offshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s.rolling(window=24, min_periods=1).std() > 0\"\n  },\n  {\n    \"name\": \"load_not_constant\",\n    \"description\": \"Load should show daily/weekly patterns; constant values for >12 hours suggest data error.\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s.rolling(window=12, min_periods=1).std() > 0\"\n  }\n]\n```",
   "parse_error": null,
   "rules": [
     {
-      "name": "wind_onshore_non_negative",
-      "description": "Wind onshore generation cannot be negative.",
-      "column": "wind_onshore_mwh",
-      "severity": "error",
-      "expression": "s >= 0"
-    },
-    {
-      "name": "solar_non_negative",
-      "description": "Solar generation cannot be negative.",
-      "column": "solar_mwh",
-      "severity": "error",
-      "expression": "s >= 0"
-    },
-    {
-      "name": "price_reasonable_bounds",
-      "description": "Day-ahead price should stay within realistic market bounds (-500 to 500 EUR/MWh).",
+      "name": "price_non_negative",
+      "description": "Day-ahead price should be non-negative (negative prices are valid in DE but typically rare; flag extreme negatives).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
-      "expression": "(s >= -500) & (s <= 500)"
+      "expression": "s >= -50"
     },
     {
-      "name": "wind_onshore_within_capacity",
-      "description": "Wind onshore generation should not exceed typical German installed capacity of ~35 GW.",
-      "column": "wind_onshore_mwh",
+      "name": "price_reasonable_upper_bound",
+      "description": "Day-ahead price should not exceed 500 EUR/MWh under normal market conditions.",
+      "column": "price_da_eur_mwh",
       "severity": "warning",
-      "expression": "s <= 35000"
+      "expression": "s <= 500"
     },
     {
-      "name": "solar_within_capacity",
-      "description": "Solar generation should not exceed typical German installed capacity of ~15 GW.",
-      "column": "solar_mwh",
+      "name": "load_positive",
+      "description": "Load must be strictly positive.",
+      "column": "load_mwh",
+      "severity": "error",
+      "expression": "s > 0"
+    },
+    {
+      "name": "load_realistic_bounds",
+      "description": "Load should remain within realistic bounds for German market (30000-80000 MWh).",
+      "column": "load_mwh",
       "severity": "warning",
-      "expression": "s <= 15000"
+      "expression": "(s >= 30000) & (s <= 80000)"
+    },
+    {
+      "name": "wind_offshore_non_negative",
+      "description": "Offshore wind generation cannot be negative.",
+      "column": "wind_offshore_mwh",
+      "severity": "error",
+      "expression": "s >= 0"
+    },
+    {
+      "name": "wind_offshore_capacity_bound",
+      "description": "Offshore wind generation should not exceed 10000 MWh (typical German offshore capacity).",
+      "column": "wind_offshore_mwh",
+      "severity": "warning",
+      "expression": "s <= 10000"
     },
     {
       "name": "price_hourly_jump_limit",
-      "description": "Day-ahead price should not jump more than 150 EUR/MWh between consecutive hours.",
+      "description": "Hour-to-hour price change should not exceed 150 EUR/MWh (extreme volatility check).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
       "expression": "s.diff().abs() <= 150"
     },
     {
-      "name": "wind_hourly_ramp_limit",
-      "description": "Wind onshore generation should not ramp more than 1500 MWh per hour.",
-      "column": "wind_onshore_mwh",
+      "name": "load_hourly_jump_limit",
+      "description": "Hour-to-hour load change should not exceed 5000 MWh (physical ramp constraint).",
+      "column": "load_mwh",
       "severity": "warning",
-      "expression": "s.diff().abs() <= 1500"
+      "expression": "s.diff().abs() <= 5000"
     },
     {
-      "name": "solar_hourly_ramp_limit",
-      "description": "Solar generation should not ramp more than 3000 MWh per hour (accounting for cloud cover changes).",
-      "column": "solar_mwh",
+      "name": "wind_offshore_hourly_jump_limit",
+      "description": "Hour-to-hour offshore wind change should not exceed 2000 MWh (weather ramp constraint).",
+      "column": "wind_offshore_mwh",
       "severity": "warning",
-      "expression": "s.diff().abs() <= 3000"
+      "expression": "s.diff().abs() <= 2000"
     },
     {
-      "name": "high_wind_low_price_correlation",
-      "description": "When wind generation is above 4500 MWh, price should typically be below 120 EUR/MWh.",
+      "name": "price_not_extreme_spike",
+      "description": "Price should not spike above 400 EUR/MWh more than once per week (extreme scarcity event).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
-      "expression": "(s.index.to_series().index.isin(s.index[s.index.get_level_values(0).isin(s.index)])) | (s <= 120)"
+      "expression": "(s <= 400) | (s.rolling(window=168, min_periods=1).apply(lambda x: (x > 400).sum()) <= 1)"
     },
     {
-      "name": "solar_night_hours_zero",
-      "description": "Solar generation during night hours (22:00-05:00 UTC) should be minimal (< 500 MWh).",
-      "column": "solar_mwh",
+      "name": "wind_offshore_not_constant",
+      "description": "Offshore wind should show variability; constant values for >24 hours suggest data error.",
+      "column": "wind_offshore_mwh",
       "severity": "warning",
-      "expression": "((s.index.hour >= 5) & (s.index.hour < 22)) | (s < 500)"
+      "expression": "s.rolling(window=24, min_periods=1).std() > 0"
     },
     {
-      "name": "price_not_extreme_outlier",
-      "description": "Price should not deviate more than 4 standard deviations from mean (extreme outlier detection).",
-      "column": "price_da_eur_mwh",
+      "name": "load_not_constant",
+      "description": "Load should show daily/weekly patterns; constant values for >12 hours suggest data error.",
+      "column": "load_mwh",
       "severity": "warning",
-      "expression": "(s - 93.46).abs() <= (4 * 30.01)"
-    },
-    {
-      "name": "wind_not_extreme_outlier",
-      "description": "Wind generation should not deviate more than 3 standard deviations from mean.",
-      "column": "wind_onshore_mwh",
-      "severity": "warning",
-      "expression": "(s - 4332.88).abs() <= (3 * 292.06)"
+      "expression": "s.rolling(window=12, min_periods=1).std() > 0"
     }
   ],
   "results": [
     {
-      "name": "wind_onshore_non_negative",
-      "description": "Wind onshore generation cannot be negative.",
-      "column": "wind_onshore_mwh",
-      "severity": "error",
-      "expression": "s >= 0",
-      "status": "pass",
-      "violations": 0,
-      "fraction": 0.0,
-      "error": null
-    },
-    {
-      "name": "solar_non_negative",
-      "description": "Solar generation cannot be negative.",
-      "column": "solar_mwh",
-      "severity": "error",
-      "expression": "s >= 0",
-      "status": "pass",
-      "violations": 0,
-      "fraction": 0.0,
-      "error": null
-    },
-    {
-      "name": "price_reasonable_bounds",
-      "description": "Day-ahead price should stay within realistic market bounds (-500 to 500 EUR/MWh).",
+      "name": "price_non_negative",
+      "description": "Day-ahead price should be non-negative (negative prices are valid in DE but typically rare; flag extreme negatives).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
-      "expression": "(s >= -500) & (s <= 500)",
+      "expression": "s >= -50",
       "status": "pass",
       "violations": 0,
       "fraction": 0.0,
       "error": null
     },
     {
-      "name": "wind_onshore_within_capacity",
-      "description": "Wind onshore generation should not exceed typical German installed capacity of ~35 GW.",
-      "column": "wind_onshore_mwh",
+      "name": "price_reasonable_upper_bound",
+      "description": "Day-ahead price should not exceed 500 EUR/MWh under normal market conditions.",
+      "column": "price_da_eur_mwh",
       "severity": "warning",
-      "expression": "s <= 35000",
+      "expression": "s <= 500",
       "status": "pass",
       "violations": 0,
       "fraction": 0.0,
       "error": null
     },
     {
-      "name": "solar_within_capacity",
-      "description": "Solar generation should not exceed typical German installed capacity of ~15 GW.",
-      "column": "solar_mwh",
+      "name": "load_positive",
+      "description": "Load must be strictly positive.",
+      "column": "load_mwh",
+      "severity": "error",
+      "expression": "s > 0",
+      "status": "pass",
+      "violations": 0,
+      "fraction": 0.0,
+      "error": null
+    },
+    {
+      "name": "load_realistic_bounds",
+      "description": "Load should remain within realistic bounds for German market (30000-80000 MWh).",
+      "column": "load_mwh",
       "severity": "warning",
-      "expression": "s <= 15000",
-      "status": "fail",
-      "violations": 407,
-      "fraction": 0.5653,
+      "expression": "(s >= 30000) & (s <= 80000)",
+      "status": "pass",
+      "violations": 0,
+      "fraction": 0.0,
+      "error": null
+    },
+    {
+      "name": "wind_offshore_non_negative",
+      "description": "Offshore wind generation cannot be negative.",
+      "column": "wind_offshore_mwh",
+      "severity": "error",
+      "expression": "s >= 0",
+      "status": "pass",
+      "violations": 0,
+      "fraction": 0.0,
+      "error": null
+    },
+    {
+      "name": "wind_offshore_capacity_bound",
+      "description": "Offshore wind generation should not exceed 10000 MWh (typical German offshore capacity).",
+      "column": "wind_offshore_mwh",
+      "severity": "warning",
+      "expression": "s <= 10000",
+      "status": "pass",
+      "violations": 0,
+      "fraction": 0.0,
       "error": null
     },
     {
       "name": "price_hourly_jump_limit",
-      "description": "Day-ahead price should not jump more than 150 EUR/MWh between consecutive hours.",
+      "description": "Hour-to-hour price change should not exceed 150 EUR/MWh (extreme volatility check).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
       "expression": "s.diff().abs() <= 150",
@@ -159,81 +170,70 @@
       "error": null
     },
     {
-      "name": "wind_hourly_ramp_limit",
-      "description": "Wind onshore generation should not ramp more than 1500 MWh per hour.",
-      "column": "wind_onshore_mwh",
+      "name": "load_hourly_jump_limit",
+      "description": "Hour-to-hour load change should not exceed 5000 MWh (physical ramp constraint).",
+      "column": "load_mwh",
       "severity": "warning",
-      "expression": "s.diff().abs() <= 1500",
+      "expression": "s.diff().abs() <= 5000",
+      "status": "fail",
+      "violations": 28,
+      "fraction": 0.0389,
+      "error": null
+    },
+    {
+      "name": "wind_offshore_hourly_jump_limit",
+      "description": "Hour-to-hour offshore wind change should not exceed 2000 MWh (weather ramp constraint).",
+      "column": "wind_offshore_mwh",
+      "severity": "warning",
+      "expression": "s.diff().abs() <= 2000",
       "status": "fail",
       "violations": 1,
       "fraction": 0.0014,
       "error": null
     },
     {
-      "name": "solar_hourly_ramp_limit",
-      "description": "Solar generation should not ramp more than 3000 MWh per hour (accounting for cloud cover changes).",
-      "column": "solar_mwh",
-      "severity": "warning",
-      "expression": "s.diff().abs() <= 3000",
-      "status": "fail",
-      "violations": 14,
-      "fraction": 0.0194,
-      "error": null
-    },
-    {
-      "name": "high_wind_low_price_correlation",
-      "description": "When wind generation is above 4500 MWh, price should typically be below 120 EUR/MWh.",
+      "name": "price_not_extreme_spike",
+      "description": "Price should not spike above 400 EUR/MWh more than once per week (extreme scarcity event).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
-      "expression": "(s.index.to_series().index.isin(s.index[s.index.get_level_values(0).isin(s.index)])) | (s <= 120)",
+      "expression": "(s <= 400) | (s.rolling(window=168, min_periods=1).apply(lambda x: (x > 400).sum()) <= 1)",
       "status": "pass",
       "violations": 0,
       "fraction": 0.0,
       "error": null
     },
     {
-      "name": "solar_night_hours_zero",
-      "description": "Solar generation during night hours (22:00-05:00 UTC) should be minimal (< 500 MWh).",
-      "column": "solar_mwh",
+      "name": "wind_offshore_not_constant",
+      "description": "Offshore wind should show variability; constant values for >24 hours suggest data error.",
+      "column": "wind_offshore_mwh",
       "severity": "warning",
-      "expression": "((s.index.hour >= 5) & (s.index.hour < 22)) | (s < 500)",
+      "expression": "s.rolling(window=24, min_periods=1).std() > 0",
       "status": "fail",
-      "violations": 210,
-      "fraction": 0.2917,
+      "violations": 1,
+      "fraction": 0.0014,
       "error": null
     },
     {
-      "name": "price_not_extreme_outlier",
-      "description": "Price should not deviate more than 4 standard deviations from mean (extreme outlier detection).",
-      "column": "price_da_eur_mwh",
+      "name": "load_not_constant",
+      "description": "Load should show daily/weekly patterns; constant values for >12 hours suggest data error.",
+      "column": "load_mwh",
       "severity": "warning",
-      "expression": "(s - 93.46).abs() <= (4 * 30.01)",
+      "expression": "s.rolling(window=12, min_periods=1).std() > 0",
       "status": "fail",
-      "violations": 5,
-      "fraction": 0.0069,
-      "error": null
-    },
-    {
-      "name": "wind_not_extreme_outlier",
-      "description": "Wind generation should not deviate more than 3 standard deviations from mean.",
-      "column": "wind_onshore_mwh",
-      "severity": "warning",
-      "expression": "(s - 4332.88).abs() <= (3 * 292.06)",
-      "status": "pass",
-      "violations": 0,
-      "fraction": 0.0,
+      "violations": 1,
+      "fraction": 0.0014,
       "error": null
     }
   ],
   "summary": {
     "total_rules": 12,
-    "pass": 6,
-    "fail": 6,
+    "pass": 7,
+    "fail": 5,
     "error": 0,
     "skipped": 0
   },
   "usage": {
-    "input_tokens": 726,
-    "output_tokens": 1084
+    "input_tokens": 859,
+    "output_tokens": 1048
   }
 }
