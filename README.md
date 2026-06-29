@@ -1,6 +1,6 @@
 # European Power Fair-Value Forecasting Pipeline
 
-**Sneha Sunil · snehasunil385@gmail.com**
+**Sneha Sunil · f20210904@dubai.bits-pilani.ac.in**
 
 End-to-end prototype for the Cobblestone Energy Graduate ADE case study:
 **European Power Fair Value — Forecasting Day-Ahead and Translating to Prompt Curve Views**
