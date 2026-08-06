@@ -342,10 +342,10 @@
 
   <!-- 5 ─────────────────────────────────────────────── -->
   <section class="slide">
-    <div class="eyebrow"><span class="num">05</span><span>Value · AI disclosure · measures</span>
-      <span class="spacer">Sneha Sunil</span></div>
+    <div class="eyebrow"><span class="num">05</span><span>Value and fit</span>
+      <span class="spacer">Including the part that does not transfer</span></div>
 
-    <h2>Where AI helped, and where I had to stop trusting it.</h2>
+    <h2>What it is worth, and the one thing that would stop it working here.</h2>
 
     <div class="cols">
       <div class="stack-lg">
@@ -353,10 +353,22 @@
           <h3>Business value</h3>
           <p style="font-size:15px;color:var(--muted)">For an operator with <strong>200 MWh/day</strong> of
             genuinely shiftable load, the hold-out window implies roughly <strong>4.6M EUR</strong> and
-            <strong>3,000 tCO₂</strong> per year. Illustrative: it assumes flexibility every day at the
+            <strong>3,000 tCO&#8322;</strong> per year. Illustrative: it assumes flexibility every day at the
             observed spread, which operational constraints would not sustain. The per-MWh figure is the
             credible claim; the annual number scales with real flexibility.</p>
         </div>
+        <div class="stack">
+          <h3>Why that suits Presight</h3>
+          <p style="font-size:15px;color:var(--muted)">The customer is a <strong>national utility</strong>
+            such as EWEC, TRANSCO or DEWA rather than a private site, which is Presight's actual customer
+            base. District cooling is the largest single component of Gulf summer peak demand and
+            desalination is a genuinely flexible industrial load; deferring peak generating capacity is a
+            national-scale outcome, not a site-level saving. As solar capacity grows under Energy Strategy
+            2050, the intraday spread this exploits widens rather than narrows.</p>
+        </div>
+      </div>
+
+      <div class="stack-lg">
         <div class="panel flag">
           <span class="tag ember">The honest transfer problem</span>
           <p style="font-size:14.5px;margin:0">This model consumes a wholesale hourly clearing price. The UAE
@@ -368,42 +380,6 @@
             <strong>system marginal cost and grid carbon intensity directly</strong> rather than inferring
             them from price. Everything downstream (the forecasting, the within-day banding, the premise
             check, the override logic) is unchanged. Only the input series changes.</p>
-        </div>
-        <div class="stack">
-          <h3>Why that suits Presight</h3>
-          <p style="font-size:15px;color:var(--muted)">It moves the customer from a private operator to a
-            <strong>national utility</strong> such as EWEC, TRANSCO or DEWA, which is Presight's actual customer
-            base. District cooling is the largest single component of Gulf summer peak demand and
-            desalination is a genuinely flexible industrial load; deferring peak generating capacity is a
-            national-scale outcome, not a site-level saving. As solar capacity grows under Energy Strategy
-            2050, the intraday spread this exploits widens rather than narrows.</p>
-        </div>
-      </div>
-
-      <div class="stack-lg">
-        <div class="stack">
-          <h3>AI inside the product</h3>
-          <p style="font-size:15px;color:var(--muted)">Claude reads the data schema and writes 8–12 executable
-            quality rules covering physical limits, market realism and temporal consistency, which the pipeline runs and
-            logs in full. A day of analyst work in seconds, and it generalises: point it at another country and
-            it writes that country's rules.</p>
-        </div>
-        <div class="panel flag">
-          <span class="tag ember">Why verification is not optional</span>
-          <p style="font-size:14.5px;margin:0">The model wrote rules containing a Python operator-precedence
-            bug, where <code>a &lt;= b | c</code> parses as <code>a &lt;= (b | c)</code>, which reported
-            <strong>720 false data failures</strong> against a true count of <strong>6</strong>. I found it,
-            fixed the prompt, and added a guard that quarantines any rule flagging over half the dataset as a
-            broken rule rather than a data finding. The guard is the load-bearing fix: it does not depend on
-            the model complying.</p>
-        </div>
-        <div class="stack">
-          <h3>AI in building this submission</h3>
-          <p style="font-size:14.5px;color:var(--muted)">I used Claude Code to research the framing, refine the
-            idea, restructure the analysis, review my code and generate the diagrams and slides. I set the
-            direction and made the judgement calls; the AI accelerated execution and challenged my assumptions,
-            including catching that my own headline correlation was a data artifact. Every number here comes
-            from code that runs.</p>
         </div>
         <div class="stack">
           <h3>How I would measure success</h3>
@@ -419,7 +395,58 @@
     </div>
   </section>
 
-  <footer>Sneha Sunil · snehasunil385@gmail.com · Working prototype and full technical report available as a running codebase</footer>
+  <!-- 6 -->
+  <section class="slide">
+    <div class="eyebrow"><span class="num">06</span><span>AI usage disclosure</span>
+      <span class="spacer">Sneha Sunil</span></div>
+
+    <h2>Where AI helped, and where I had to stop trusting it.</h2>
+
+    <p class="lede">I used <strong>Claude</strong> (Anthropic), through Claude Code, rather than Copilot.
+      The handout permits other tools, and using the same model the product depends on meant its failure
+      modes were something I had to understand rather than assume.</p>
+
+    <div class="cols">
+      <div class="stack">
+        <h3>How AI supported this submission</h3>
+        <table>
+          <tbody>
+            <tr><td style="width:38%"><b>Research the problem</b></td><td>European power market structure, the merit-order effect, and UAE market arrangements. I verified the market-structure claims against primary sources before relying on them.</td></tr>
+            <tr><td><b>Generate and refine ideas</b></td><td>Reframing the work from price forecasting to demand scheduling, and pushing back when the sustainability angle stopped being supported by the data.</td></tr>
+            <tr><td><b>Structure the proposal</b></td><td>Checking my draft against this handout's required sections and flagging that target users, business value and success measures were missing.</td></tr>
+            <tr><td><b>Create visuals and diagrams</b></td><td>The price chart and pipeline diagram, drawn from real pipeline output rather than illustrative numbers.</td></tr>
+            <tr><td><b>Improve writing</b></td><td>Editing for concision. I rewrote anything that overstated a result.</td></tr>
+            <tr><td><b>Test and validate</b></td><td>Code review, which found both errors described opposite. Every number here comes from code that runs.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="stack-lg">
+        <div class="stack">
+          <h3>AI inside the product itself</h3>
+          <p style="font-size:15px;color:var(--muted)">Claude reads the data schema and writes 8&#8211;12
+            executable quality rules covering physical limits, market realism and temporal consistency, which
+            the pipeline runs and logs in full. A day of analyst work in seconds, and it generalises: point it
+            at another country and it writes that country's rules.</p>
+        </div>
+        <div class="panel flag">
+          <span class="tag ember">Two things AI got wrong, and what I changed</span>
+          <p style="font-size:14.5px;margin:0"><b>1.</b> It wrote rules containing a Python operator-precedence
+            bug, where <code>a &lt;= b | c</code> parses as <code>a &lt;= (b | c)</code>, reporting
+            <strong>720 false data failures</strong> against a true count of <strong>6</strong>. I fixed the
+            prompt and added a guard that quarantines any rule flagging over half the dataset. The guard is the
+            load-bearing fix: it does not depend on the model complying.</p>
+          <p style="font-size:14.5px;margin:0"><b>2.</b> My headline correlation of r&nbsp;=&nbsp;0.86 was an
+            artifact of missing wind data. Review caught it; the corrected figure is 0.40, and it changed the
+            entire pitch.</p>
+          <p style="font-size:14.5px;margin:0"><strong>Both corrections are in this deck rather than hidden.
+            That is the disclosure that matters.</strong></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>Sneha Sunil &middot; snehasunil385@gmail.com &middot; 6 August 2026 &middot; Working prototype, technical report and full source available on request</footer>
 </div>
 
 </body>
