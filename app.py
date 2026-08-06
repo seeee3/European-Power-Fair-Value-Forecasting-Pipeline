@@ -50,7 +50,7 @@ overview = qa.get("overview", {})
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚡ GridShift")
-    st.caption("Carbon-aware load shifting · DE-LU bidding zone")
+    st.caption("Scheduling flexible demand · DE-LU bidding zone")
     st.divider()
 
     if overview:
@@ -95,8 +95,8 @@ tab_overview, tab_qa, tab_model, tab_signal, tab_forecast, tab_figures = st.tabs
 # TAB 1 — OVERVIEW
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_overview:
-    st.header("GridShift — Carbon-Aware Load Shifting")
-    st.caption("Forecasting when the grid is clean, so flexible demand can run then instead")
+    st.header("GridShift — Scheduling Flexible Electricity Demand")
+    st.caption("Forecasting tomorrow's hourly prices, so flexible demand runs in the cheap, cleaner hours")
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -132,13 +132,14 @@ with tab_overview:
         src_df = pd.DataFrame([
             {"Series": "Day-Ahead price", "Source": "SMARD", "Filter": "4169", "Coverage": "100%"},
             {"Series": "Load (consumption)", "Source": "SMARD", "Filter": "4381", "Coverage": "100%"},
-            {"Series": "Wind onshore", "Source": "SMARD", "Filter": "4066", "Coverage": "88% ⚠️"},
+            {"Series": "Wind onshore", "Source": "SMARD", "Filter": "4066", "Coverage": "100%"},
             {"Series": "Wind offshore", "Source": "SMARD", "Filter": "4065", "Coverage": "100%"},
-            {"Series": "Solar (PV)", "Source": "SMARD", "Filter": "4067", "Coverage": "88% ⚠️"},
+            {"Series": "Solar (PV)", "Source": "SMARD", "Filter": "4067", "Coverage": "100%"},
         ])
         st.dataframe(src_df, hide_index=True, use_container_width=True)
-        st.caption("SMARD returns no wind onshore or solar data after July 2025, which truncates the "
-                   "usable feature matrix to 2025-07-10. Documented in qa_report.json.")
+        st.caption("⚠️ SMARD is not reproducible run-to-run: repeated fetches of the same range returned "
+                   "different coverage (one lost load, one lost wind onshore, one 404'd wind offshore). "
+                   "This dataset is pinned from the most complete version of each series — see REPORT.md §1.1.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -294,7 +295,7 @@ with tab_model:
 # TAB 4 — LOAD SHIFT
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_signal:
-    st.header("Carbon-Aware Load Shift")
+    st.header("Load-Shift Recommendation")
 
     if not signal:
         st.warning("No load_shift_plan.json found. Run the pipeline first.")
@@ -319,7 +320,7 @@ with tab_signal:
             st.warning(f"Premise could not be validated: {link.get('reason', 'unknown')}")
 
         st.divider()
-        st.subheader("Recommendation")
+        st.subheader("Today's recommendation")
         conf = signal.get("confidence", "low")
         badge = {"high": "🟢", "medium": "🟡", "low": "⚪"}.get(conf, "⚪")
 

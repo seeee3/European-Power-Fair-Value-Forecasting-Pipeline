@@ -27,7 +27,9 @@ An earlier version of this analysis reported r = 0.86. That figure was an artifa
 
 ### Target users and stakeholders
 
-Operators of large flexible loads — district cooling utilities, desalination and water authorities, EV charging networks, data centre operators. Grid operators benefit indirectly: shifting demand off the evening peak defers capacity investment. The clearest buyer is the operator's finance function, with sustainability reporting as a secondary benefit.
+Operators of large flexible loads — district cooling utilities, desalination and water authorities, EV charging networks, data centre operators. Grid operators benefit indirectly: shifting demand off the evening peak defers capacity investment.
+
+**In a UAE deployment the primary customer is the national utility itself** — EWEC, TRANSCO or DEWA — rather than an individual site. Because those entities are the single buyer and the system operator, they capture the deferred-capacity benefit directly, at national scale, and they are the kind of government-linked customer Presight already serves. District cooling is the largest single component of Gulf summer peak demand and desalination is a genuinely flexible industrial load, so the addressable flexibility is unusually large.
 
 ### Technology, tools and data
 
@@ -68,7 +70,7 @@ The strategic point is that this decarbonises and saves money through *schedulin
 - **The carbon case is modest.** Only the within-day component of the price/carbon relationship is actionable, and it is small (0.034 tCO₂/MWh). Sell this on cost and peak shaving; treat carbon as a co-benefit.
 - **Carbon intensity is estimated, not metered.** It is derived from renewable share of demand, so the correlation demonstrates that price tracks *renewable share*, not measured emissions. Production use needs the grid operator's published emissions factors.
 - **The source data is unreliable.** Repeated fetches from SMARD returned different coverage each time — one run lost the load series entirely, another lost wind onshore, a third returned a 404. This is precisely how the r = 0.86 artifact arose. Any production version needs pinned, versioned datasets and coverage assertions before modelling, not after.
-- **Validated on Germany, not the UAE.** The mechanism depends on marginal pricing and high renewable penetration. It transfers as the UAE's solar build-out continues under Energy Strategy 2050, but needs revalidation on local data and market rules.
+- **The UAE has no wholesale hourly price to forecast.** This is the most important limitation, and it is structural rather than statistical. The model consumes a wholesale clearing price set by a marginal generator; EWEC operates as a **single buyer** procuring through long-term PPAs, DEWA is vertically integrated, and tariffs are regulated. Lifting this system to Abu Dhabi unchanged would fail because the input signal does not exist. The fix is a substitution, not a rebuild: in a single-buyer market the utility already knows its own dispatch stack, so it forecasts **system marginal cost and grid carbon intensity directly** instead of inferring them from price. The forecasting, within-day banding, premise check and override logic are all unchanged — only the input series changes. It also improves the commercial fit, moving the customer from a private site operator to a national utility.
 - **Physics bounds flexibility.** Storage limits, minimum output levels and delivery deadlines constrain what can move; the process constraint must always override the recommendation.
 - **Rebound risk.** If everyone shifts into the same cheap hours, those hours stop being cheap. At scale this needs coordination with the grid operator.
 
