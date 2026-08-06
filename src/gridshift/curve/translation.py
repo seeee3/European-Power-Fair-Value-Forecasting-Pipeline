@@ -1,19 +1,19 @@
 """
-DA → Prompt Curve Translation.
+Hourly forecasts → delivery-block views.
 
-Converts hourly next-day price forecasts into delivery-period views
-that can directly inform prompt month/quarter positioning.
+Aggregates hourly next-day price forecasts into the standard block structure
+used across European power markets. The blocks matter here because flexible
+demand is scheduled in blocks, not hour by hour: a chiller plant or a
+desalination train commits to a run window, so a block-level view of when the
+grid is cheap and clean is what an operator can actually act on.
 
-Definitions (German market convention):
-  - Baseload:  all 24 hours (MW average = arithmetic mean of hourly prices)
+Definitions (Central European convention):
+  - Baseload:  all 24 hours (arithmetic mean of hourly prices)
   - Peak:      hours 08–19 (CET/CEST), Mon–Fri only
   - Off-peak:  remaining hours
-  - Prompt month:  nearest calendar month not yet expired (Cal+1)
-  - Prompt quarter: nearest calendar quarter not yet expired
 
-Trading signal framework:
-  The desk uses the fair-value band to decide directional bias and
-  whether to buy/sell the prompt month against the spot roll.
+This module is deliberately decision-free. It reshapes the forecast and nothing
+more; the load-shift recommendation built on top of it lives in `load_shift.py`.
 """
 from __future__ import annotations
 
@@ -135,98 +135,6 @@ def compute_delivery_views(
                 )
             )
     return views
-
-
-def generate_trading_signal(
-    views: list[DeliveryView],
-    model_mae: float,
-    current_prompt_price: float | None = None,
-) -> dict[str, Any]:
-    """
-    Translate delivery views into an actionable trading signal.
-
-    Logic:
-      - If forecast_mean > current_prompt + MAE → directional long bias (prompt month)
-      - If forecast_mean < current_prompt - MAE → directional short bias
-      - Otherwise → no edge, stand aside
-      - peak_spread > 0 → shape: buy peak, sell base
-      - Confidence band width (p90-p10) determines position sizing
-
-    Invalidation conditions (must be stated explicitly per case study requirements):
-      - Unexpected nuclear outage announcement → upside to base load
-      - Extreme weather event (cold snap / wind drought) → override fundamentals
-      - Cross-border congestion changes → price zone divergence
-      - Model MAE > 30 EUR/MWh → signal unreliable, reduce size
-    """
-    base_views = [v for v in views if v.product_type == "base"]
-    peak_views = [v for v in views if v.product_type == "peak"]
-
-    if not base_views:
-        return {"signal": "no_data", "reasoning": "No base delivery views available"}
-
-    # Use next full delivery period as the actionable view
-    primary = base_views[0]
-    band_width = primary.forecast_p90 - primary.forecast_p10
-
-    direction = "neutral"
-    reasoning = []
-    if current_prompt_price is not None:
-        diff = primary.forecast_mean - current_prompt_price
-        if diff > model_mae:
-            direction = "long"
-            reasoning.append(
-                f"Fair value {primary.forecast_mean:.1f} exceeds prompt {current_prompt_price:.1f} "
-                f"by {diff:.1f} EUR/MWh (>{model_mae:.1f} MAE threshold) → buy prompt base"
-            )
-        elif diff < -model_mae:
-            direction = "short"
-            reasoning.append(
-                f"Fair value {primary.forecast_mean:.1f} below prompt {current_prompt_price:.1f} "
-                f"by {abs(diff):.1f} EUR/MWh → sell prompt base"
-            )
-        else:
-            reasoning.append(
-                f"Forecast {primary.forecast_mean:.1f} within ±MAE of prompt {current_prompt_price:.1f} "
-                "→ no directional edge"
-            )
-    else:
-        reasoning.append("No current prompt price provided; cannot compute directional signal")
-
-    peak_spread_signal = None
-    if peak_views:
-        pk = peak_views[0]
-        spread = pk.forecast_mean - primary.forecast_mean
-        peak_spread_signal = {
-            "peak_vs_base_spread_eur_mwh": round(spread, 2),
-            "action": "buy peak vs base" if spread > 5 else "flatten shape" if spread < 2 else "hold",
-        }
-        reasoning.append(
-            f"Peak/base spread forecast: {spread:.1f} EUR/MWh → {peak_spread_signal['action']}"
-        )
-
-    return {
-        "period": primary.period_label,
-        "forecast_base_eur_mwh": primary.forecast_mean,
-        "current_prompt_price_eur_mwh": round(current_prompt_price, 2) if current_prompt_price is not None else None,
-        "confidence_band": [primary.forecast_p10, primary.forecast_p90],
-        "band_width_eur_mwh": round(band_width, 2),
-        "model_mae_threshold_eur_mwh": round(model_mae, 2),
-        "direction": direction,
-        "peak_spread": peak_spread_signal,
-        "reasoning": reasoning,
-        "invalidation_conditions": [
-            "Unplanned nuclear outage (>1 GW) announcement within 4 hours of gate closure",
-            "Extreme cold snap (load +15% vs forecast) not captured in fundamentals",
-            "Wind drought: generation <30% of installed capacity for ≥3 consecutive days",
-            "Cross-border congestion causing price zone split from NL/FR >€20/MWh",
-            f"Model out-of-sample MAE > 2× training MAE ({2 * model_mae:.0f} EUR/MWh) → reduce position to 0",
-        ],
-        "desk_actions": [
-            "Express directional bias via prompt month baseload futures (EEX)",
-            "Express shape via peak/offpeak spread products (EEX Peak/Offpeak)",
-            "Size position by band_width: narrower band → larger position",
-        ],
-    }
 
 
 def views_to_dataframe(views: list[DeliveryView]) -> pd.DataFrame:

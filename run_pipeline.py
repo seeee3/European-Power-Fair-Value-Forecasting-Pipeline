@@ -2,8 +2,8 @@
 """Entry point: runs the full European power fair-value forecasting pipeline."""
 import sys
 
-from cobblestone.config import Config
-from cobblestone.pipeline import Pipeline
+from gridshift.config import Config
+from gridshift.pipeline import Pipeline
 
 
 def main() -> None:

@@ -10,14 +10,14 @@ import pandas as pd
 from rich.console import Console
 from rich.rule import Rule
 
-from cobblestone import config as cfg
-from cobblestone.config import Config, ensure_dirs
-from cobblestone.curve import translation as curve
-from cobblestone.features.engineer import build_feature_matrix
-from cobblestone.models.baseline import SeasonalNaive
-from cobblestone.models.forecaster import PowerPriceForecaster, cv_summary
-from cobblestone.quality import llm_qa, standard_qa
-from cobblestone import plots
+from gridshift import config as cfg
+from gridshift.config import Config, ensure_dirs
+from gridshift.curve import load_shift, translation as curve
+from gridshift.features.engineer import build_feature_matrix
+from gridshift.models.baseline import SeasonalNaive
+from gridshift.models.forecaster import PowerPriceForecaster, cv_summary
+from gridshift.quality import llm_qa, standard_qa
+from gridshift import plots
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -47,7 +47,7 @@ class Pipeline:
 
         if self.config.entsoe_api_key:
             console.print("  Source: ENTSO-E Transparency Platform")
-            from cobblestone.ingestion.entsoe_client import fetch_dataset as entsoe_fetch
+            from gridshift.ingestion.entsoe_client import fetch_dataset as entsoe_fetch
             df = entsoe_fetch(
                 self.config.entsoe_api_key,
                 self.config.start_date,
@@ -56,7 +56,7 @@ class Pipeline:
         else:
             console.print("  Source: SMARD (Bundesnetzagentur) — no API key required")
             console.print("  [dim]Set ENTSOE_API_KEY in .env to use ENTSO-E instead[/dim]")
-            from cobblestone.ingestion.smard import fetch_dataset as smard_fetch
+            from gridshift.ingestion.smard import fetch_dataset as smard_fetch
             df = smard_fetch(self.config.start_date, self.config.end_date)
 
         df.to_parquet(RAW_PARQUET)
@@ -226,8 +226,8 @@ class Pipeline:
         return forecaster, lgbm_preds, baseline_preds
 
     # ─────────────────────────────────────────────────────────────────────────
-    def _step_curve(self, forecaster: PowerPriceForecaster) -> None:
-        console.print(Rule("[bold blue]Step 5: Prompt Curve Translation[/bold blue]"))
+    def _step_curve(self, forecaster: PowerPriceForecaster, df_raw: pd.DataFrame) -> None:
+        console.print(Rule("[bold blue]Step 5: Carbon-Aware Load Shift[/bold blue]"))
 
         # Use the most recent month of test-set predictions as the "future" view
         preds_path = SUBMISSION_CSV
@@ -253,51 +253,62 @@ class Pipeline:
         console.print(f"  Weekly base views: {len([v for v in weekly_views if v.product_type == 'base'])}")
         console.print(f"  Monthly base views: {len([v for v in monthly_views if v.product_type == 'base'])}")
 
-        # Generate trading signal
-        cv_mae_approx = 30.0
+        # Build the carbon-aware load-shift plan
+        test_mae = 30.0
         try:
             with open(QA_REPORT) as f:
                 qa = json.load(f)
-            cv_mae_approx = qa.get("model_performance", {}).get("lgbm_test_mae_eur_mwh", 30.0)
+            test_mae = qa.get("model_performance", {}).get("lgbm_test_mae_eur_mwh", 30.0)
         except Exception:
             pass
 
-        # Derive a reference "current prompt price" from the 30-day realized average
-        # immediately preceding the forecast window.  In a live system this would come
-        # from EEX/ICIS screen prices; here we use trailing actuals as a proxy.
-        prompt_price: float | None = None
-        if RAW_PARQUET.exists():
-            try:
-                raw_prices = pd.read_parquet(RAW_PARQUET)["price_da_eur_mwh"]
-                test_start = y_pred.index.min()
-                prior = raw_prices.loc[:test_start - pd.Timedelta(hours=1)].dropna()
-                if len(prior) >= 720:
-                    prompt_price = round(float(prior.iloc[-720:].mean()), 2)
-                    logger.info("Prompt price proxy (30-day trailing mean): %.2f EUR/MWh", prompt_price)
-            except Exception as exc:
-                logger.warning("Could not compute prompt price proxy: %s", exc)
+        plan = load_shift.build_shift_plan(y_pred, df_raw, model_mae=test_mae)
 
-        signal = curve.generate_trading_signal(
-            all_views, model_mae=cv_mae_approx, current_prompt_price=prompt_price
-        )
+        link = plan.get("price_carbon_link", {})
+        console.print("\n  [bold]Price/carbon link (premise check)[/bold]")
+        if link.get("status") == "ok":
+            console.print(f"    Pearson r:  {link['pearson_r']:.3f}   "
+                          f"Spearman r: {link['spearman_r']:.3f}   "
+                          f"({link['n_hours']:,} hours)")
+            console.print(f"    Cheapest third of hours: {link['mean_renewable_share_cheapest_tercile']:.1%} renewable, "
+                          f"{link['mean_intensity_cheapest_tercile_t_per_mwh']:.3f} tCO2/MWh")
+            console.print(f"    Priciest third of hours: {link['mean_renewable_share_priciest_tercile']:.1%} renewable, "
+                          f"{link['mean_intensity_priciest_tercile_t_per_mwh']:.3f} tCO2/MWh")
+        else:
+            console.print(f"    [yellow]Unavailable: {link.get('reason')}[/yellow]")
 
-        console.print("\n  [bold]Trading Signal[/bold]")
-        console.print(f"    Period:     {signal['period']}")
-        console.print(f"    Fair value: {signal['forecast_base_eur_mwh']:.1f} EUR/MWh")
-        if prompt_price is not None:
-            console.print(f"    Prompt ref: {prompt_price:.1f} EUR/MWh (30-day trailing avg)")
-        console.print(f"    Band:       [{signal['confidence_band'][0]:.1f}, {signal['confidence_band'][1]:.1f}]")
-        console.print(f"    Direction:  [bold]{signal['direction'].upper()}[/bold]")
-        for r in signal["reasoning"]:
-            console.print(f"    • {r}")
-        console.print("\n  [dim]Signal invalidation conditions:[/dim]")
-        for cond in signal["invalidation_conditions"]:
+        green, red = plan["green_window"], plan["red_window"]
+        impact = plan["impact_per_mwh_shifted"]
+        console.print("\n  [bold]Load-Shift Recommendation[/bold]")
+        console.print(f"    Period:     {plan['period']}")
+        console.print(f"    [green]Green hours[/green] (local): {green['local_hours']}  "
+                      f"@ {green['mean_price_eur_mwh']:.1f} EUR/MWh, "
+                      f"{green['mean_renewable_share']:.1%} renewable")
+        console.print(f"    [red]Red hours[/red]   (local): {red['local_hours']}  "
+                      f"@ {red['mean_price_eur_mwh']:.1f} EUR/MWh, "
+                      f"{red['mean_renewable_share']:.1%} renewable")
+        console.print(f"    Per MWh shifted: save {impact['cost_saving_eur']:.1f} EUR, "
+                      f"avoid {impact['co2_avoided_t']:.3f} tCO2")
+        console.print(f"    Confidence: [bold]{plan['confidence'].upper()}[/bold] "
+                      f"(forecast MAE {plan['forecast_mae_eur_mwh']:.1f} EUR/MWh)")
+
+        # Illustrative scale-up: a mid-size district cooling plant with roughly
+        # 200 MWh/day of genuinely shiftable chilled-water storage capacity.
+        plan["illustrative_scale_up"] = load_shift.scale_impact(plan, shiftable_mwh_per_day=200)
+        scaled = plan["illustrative_scale_up"]
+        if scaled:
+            console.print(f"    At 200 MWh/day shiftable: "
+                          f"{scaled['annual_cost_saving_eur']:,} EUR/yr, "
+                          f"{scaled['annual_co2_avoided_t']:,} tCO2/yr")
+
+        console.print("\n  [dim]Override conditions:[/dim]")
+        for cond in plan["override_conditions"]:
             console.print(f"    ✗ {cond}")
 
-        signal_path = cfg.OUTPUTS / "trading_signal.json"
-        with open(signal_path, "w") as f:
-            json.dump(signal, f, indent=2, default=str)
-        console.print(f"\n  Trading signal → {signal_path}")
+        plan_path = cfg.OUTPUTS / "load_shift_plan.json"
+        with open(plan_path, "w") as f:
+            json.dump(plan, f, indent=2, default=str)
+        console.print(f"\n  Load-shift plan → {plan_path}")
 
     # ─────────────────────────────────────────────────────────────────────────
     def run(self) -> None:
@@ -305,7 +316,7 @@ class Pipeline:
             level=logging.INFO,
             format="%(asctime)s  %(levelname)s  %(name)s  %(message)s",
         )
-        console.print(Rule("[bold green]European Power Fair-Value Pipeline[/bold green]"))
+        console.print(Rule("[bold green]GridShift — Carbon-Aware Load Shifting[/bold green]"))
         console.print(f"  Market: {self.config.market}  |  "
                       f"{self.config.start_date} → {self.config.end_date}")
 
@@ -313,7 +324,7 @@ class Pipeline:
         self._step_qa(df_raw)
         X, y = self._step_features(df_raw)
         forecaster, lgbm_preds, baseline_preds = self._step_model(X, y, df_raw)
-        self._step_curve(forecaster)
+        self._step_curve(forecaster, df_raw)
 
         console.print(Rule("[bold green]Pipeline complete[/bold green]"))
         console.print(f"  Outputs: {cfg.OUTPUTS}")

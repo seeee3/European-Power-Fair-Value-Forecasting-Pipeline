@@ -21,8 +21,12 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# A rule rejecting more than this share of rows is quarantined as malformed
+# rather than reported as a data-quality failure. See _execute_rule.
+SUSPECT_VIOLATION_FRACTION = 0.50
+
 SYSTEM_PROMPT = textwrap.dedent("""
-    You are a quantitative analyst at a European energy trading desk.
+    You are a data engineer validating a European power market dataset.
     You will receive a description of a power market dataset (schema, statistics,
     and sample rows) and must return a JSON array of validation rules.
 
@@ -47,6 +51,16 @@ SYSTEM_PROMPT = textwrap.dedent("""
     other columns inside an expression. Do not attempt cross-series checks
     (e.g. checking wind generation when writing a price rule) — the other
     column is not in scope. Write univariate rules only.
+
+    CRITICAL — operator precedence: in Python `|` and `&` bind MORE tightly than
+    the comparison operators, so `s.diff().abs() <= 150 | s.diff().isna()` is
+    silently parsed as `s.diff().abs() <= (150 | s.diff().isna())`, which is not
+    what you mean. Fully parenthesise EVERY comparison before combining it:
+      CORRECT:   (s.diff().abs() <= 150) | (s.diff().isna())
+      WRONG:      s.diff().abs() <= 150  |  s.diff().isna()
+
+    Rules must pass on well-formed data. A rule that flags most rows is a bug in
+    the rule, not a finding — calibrate thresholds against the supplied statistics.
 """).strip()
 
 
@@ -106,9 +120,24 @@ def _execute_rule(df: pd.DataFrame, rule: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(mask, pd.Series):
             mask = pd.Series([bool(mask)] * len(s), index=s.index)
         violations = int((~mask).sum())
+        fraction = violations / max(len(s), 1)
         result["violations"] = violations
-        result["fraction"] = round(violations / max(len(s), 1), 4)
-        result["status"] = "pass" if violations == 0 else "fail"
+        result["fraction"] = round(fraction, 4)
+
+        # A rule that rejects most of the dataset is far more likely to be a
+        # malformed rule than a genuine mass data failure — the common cause is
+        # Python operator precedence, where `a <= b | c` parses as `a <= (b | c)`
+        # and quietly evaluates to nonsense. Quarantine these as "suspect" rather
+        # than reporting them as data-quality findings: an unreviewed LLM rule
+        # must never be able to raise a false alarm about the data.
+        if fraction > SUSPECT_VIOLATION_FRACTION:
+            result["status"] = "suspect"
+            result["error"] = (
+                f"Rule flags {fraction:.1%} of rows — treated as a malformed rule, "
+                "not a data finding. Check operator precedence and threshold calibration."
+            )
+        else:
+            result["status"] = "pass" if violations == 0 else "fail"
     except Exception:
         result["status"] = "error"
         result["error"] = traceback.format_exc(limit=3)
@@ -202,6 +231,7 @@ def run_llm_qa(
     fails = sum(1 for r in results if r["status"] == "fail")
     errors = sum(1 for r in results if r["status"] == "error")
     skipped = sum(1 for r in results if r["status"] == "skipped")
+    suspect = sum(1 for r in results if r["status"] == "suspect")
 
     log["summary"] = {
         "total_rules": len(results),
@@ -209,8 +239,10 @@ def run_llm_qa(
         "fail": fails,
         "error": errors,
         "skipped": skipped,
+        "suspect": suspect,
     }
-    logger.info("LLM QA: %d pass, %d fail, %d error, %d skipped", passes, fails, errors, skipped)
+    logger.info("LLM QA: %d pass, %d fail, %d error, %d skipped, %d suspect",
+                passes, fails, errors, skipped, suspect)
 
     _save_log(log, log_path)
     return log
@@ -236,7 +268,8 @@ def print_llm_qa_summary(log: dict[str, Any]) -> None:
         f"  {s.get('total_rules', 0)} rules: "
         f"[green]{s.get('pass', 0)} pass[/green]  "
         f"[red]{s.get('fail', 0)} fail[/red]  "
-        f"[yellow]{s.get('error', 0)} error[/yellow]"
+        f"[yellow]{s.get('error', 0)} error[/yellow]  "
+        f"[magenta]{s.get('suspect', 0)} suspect[/magenta]"
     )
 
     if not log.get("results"):
@@ -249,14 +282,15 @@ def print_llm_qa_summary(log: dict[str, Any]) -> None:
     t.add_column("Violations", justify="right")
     t.add_column("Description")
 
-    status_colors = {"pass": "green", "fail": "red", "error": "yellow", "skipped": "dim"}
+    status_colors = {"pass": "green", "fail": "red", "error": "yellow",
+                     "skipped": "dim", "suspect": "magenta"}
     for r in log["results"]:
         color = status_colors.get(r["status"], "white")
         t.add_row(
             r["name"],
             r["column"],
             f"[{color}]{r['status']}[/{color}]",
-            str(r["violations"]) if r["status"] in ("pass", "fail") else "—",
+            str(r["violations"]) if r["status"] in ("pass", "fail", "suspect") else "—",
             r["description"],
         )
     console.print(t)

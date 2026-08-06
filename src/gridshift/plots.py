@@ -11,7 +11,7 @@ import pandas as pd
 import seaborn as sns
 
 if TYPE_CHECKING:
-    from cobblestone.models.forecaster import FoldResult
+    from gridshift.models.forecaster import FoldResult
 
 plt.rcParams.update({
     "figure.dpi": 120,

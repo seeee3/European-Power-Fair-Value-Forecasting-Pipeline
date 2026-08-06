@@ -1,129 +1,204 @@
-# European Power Fair Value: Forecasting Day-Ahead and Translating to Prompt Curve Views
+# GridShift — Technical Report
 
+**Scheduling flexible electricity demand from day-ahead price forecasts**
 **Sneha Sunil · snehasunil385@gmail.com**
 
 ---
 
-## Executive Summary
+## Executive summary
 
-- **Market:** Germany (DE-LU bidding zone, EPEX Spot) — largest and most liquid European power market, with 4 years of fully public hourly data via SMARD (no API key required)
-- **Data:** 35,064 hourly observations (2022–2025), zero missing values across all retained series; dual ingestion source — SMARD primary, ENTSO-E as keyed alternative with automatic annual chunking
-- **Forecast (Option A):** Next-day hourly DA prices forecast by LightGBM; aggregated to weekly/monthly base/peak/offpeak delivery views
-- **Model result:** LightGBM beats the seasonal naive baseline by **+42.2% MAE** (28.6 vs 49.4 EUR/MWh, Oct–Dec 2025 hold-out); 12-fold walk-forward CV — zero temporal leakage
-- **Trading signal:** Oct 2025 directional = **NEUTRAL** (forecast 83.7 vs reference 83.5 EUR/MWh, within ±MAE); shape trade = **buy peak vs base** (spread +20.6 EUR/MWh, above €5 threshold)
-- **AI component:** Claude (`claude-haiku-4-5`) called programmatically to propose 8–12 domain-aware QA validation rules; full prompt, raw response, and per-rule execution results logged to `outputs/llm_qa_log.json`
-
----
-
-## 1. Market Selection & Data Sources
-
-**Market:** Germany (DE-LU) — chosen for liquidity, public data availability, and well-studied renewable merit-order dynamics.
-
-| Series | Source | Filter / Endpoint | Granularity |
-|--------|--------|------------------|-------------|
-| Day-Ahead prices | SMARD (Bundesnetzagentur) | Filter 4169, DE-LU | 15-min → hourly |
-| Wind onshore generation | SMARD | Filter 4066, DE-LU | 15-min → hourly |
-| Solar (PV) generation | SMARD | Filter 4067, DE-LU | 15-min → hourly |
-
-ENTSO-E Transparency Platform (`src/cobblestone/ingestion/entsoe_client.py`) is implemented as an optional keyed alternative (DA prices: A44/A01; load: A65; wind/solar: A75 with psrType B19/B18/B16). Multi-year requests are automatically split into annual chunks to respect the API's per-call limit.
-
-**Timezone / DST:** All timestamps stored as UTC. Calendar features and peak/offpeak flags derived via `pandas.DatetimeIndex.tz_convert("Europe/Berlin")`, correctly handling the CET↔CEST transition.
+- **What it does:** forecasts next-day hourly electricity prices and bands each day's 24 hours into green/amber/red, so operators of flexible load know which hours to run in.
+- **Model:** LightGBM on 37 features. Hold-out **MAE 28.76 EUR/MWh** vs seasonal-naive **49.42** — **41.8% better**. 12-fold walk-forward CV (MAE 23.9 ± 7.3), no temporal leakage.
+- **Actionable impact:** within-day shifting saves **~81 EUR/MWh** and avoids **~0.034 tCO₂/MWh** across 2022–2025.
+- **The main finding is a negative one.** The original thesis — that price is a strong proxy for carbon intensity — does not hold on complete data. See §4.
+- **AI component:** Claude (`claude-haiku-4-5`) generates executable data-quality rules; the pipeline runs and audits them behind a guard that quarantines malformed rules.
 
 ---
 
-## 2. Data Quality
+## 1. Data
 
-| Check | Result |
-|-------|--------|
-| Row count | 35,064 (zero hourly gaps) |
-| Duplicate timestamps | 0 |
-| Price missing | 0% |
-| Wind onshore missing | 0% |
-| Solar missing | 0% |
-| Price range | −500 to +936 EUR/MWh (within EPEX hard limits of ±3,000) |
+**Source:** SMARD (Bundesnetzagentur), no API key. ENTSO-E is implemented as a keyed alternative (`ingestion/entsoe_client.py`) with automatic annual chunking.
 
-**Load data (SMARD filter 4381):** 62.6% nulls — dropped from feature engineering; rationale recorded in `outputs/qa_report.json`. ENTSO-E load (A65) is reliable (0.01% missing) and used automatically when `ENTSOE_API_KEY` is set.
+| Series | Filter |
+|---|---|
+| Day-ahead price | 4169 |
+| Load | 4381 |
+| Wind onshore / offshore | 4066 / 4065 |
+| Solar PV | 4067 |
 
-**AI-driven QA (`src/cobblestone/quality/llm_qa.py`):** Claude is called via API with a structured system prompt to propose validation rules as JSON (8–12 rules covering physical feasibility, market realism, temporal consistency). The pipeline executes each rule against the dataset and logs: system prompt, raw response, parsed rules, per-rule violation count and fraction, and any parse/API errors. Controls: `temperature=0.2`; JSON-only output with markdown fence stripping; expressions evaluated on an isolated `pd.Series`; API key via environment variable only.
+**Timezone:** timestamps stored UTC; calendar features and reported clock hours derived via `tz_convert("Europe/Berlin")`, handling CET↔CEST correctly.
 
----
+**Coverage:** 35,064 hourly rows, 2022-01-01 → 2025-12-31. After feature engineering (lags require warm-up), **34,728 usable rows**, 2022-01-15 → 2025-12-31.
 
-## 3. Forecasting Methodology
+### 1.1 The source is not reproducible run-to-run
 
-**Target (Option A):** Next-day hourly DA prices, aggregated to weekly/monthly delivery averages. Hourly granularity preserves the peak/offpeak shape that is directly tradeable as EEX products.
+This is the most operationally important finding in the project. Repeated SMARD fetches of the *same* date range returned materially different data:
 
-**Leakage control:** All fundamentals lagged ≥24h. Rolling price statistics are computed over a window shifted 24h before applying the rolling function.
+| Fetch | price | load | wind onshore | wind offshore | solar |
+|---|---|---|---|---|---|
+| A | complete | complete | ends 2024-12-31 (25% missing) | complete | ends 2025-07-09 |
+| B | complete | **62.6% missing** | complete | **HTTP 404, absent** | complete |
 
-**Features (31 total):** Calendar (hour, dow, month, week-of-year, is\_weekend, is\_holiday, sine/cosine encodings); price lags at 24h/48h/72h/168h/336h; 24h and 168h rolling mean/std/max/min (shifted); wind and solar lags at 24h/168h; total renewables lag.
+Neither fetch alone supports the analysis. The canonical dataset was assembled by taking the most complete version of each series across fetches, giving <0.05% missingness on all five. `FORCE_REFETCH` is now set to `false` so the pinned cache is used and results are stable.
 
-**Baseline:** Seasonal Naive — `price[t] = price[t − 168h]` (same hour, prior week). Standard industry benchmark for hourly power prices.
-
-**Model:** LightGBM regressor (800 estimators, lr=0.05, 63 leaves, subsample=0.8). Walk-forward CV with 12 monthly folds (expanding training window, Oct 2024 – Sep 2025). Hold-out test set: Oct–Dec 2025 (2,208 hours, never seen during model development).
-
-| Metric | LightGBM CV (mean ± std) | LightGBM Test | Seasonal Naive |
-|--------|--------------------------|---------------|----------------|
-| MAE (EUR/MWh) | 24.7 ± 7.7 | **28.6** | 49.4 |
-| RMSE (EUR/MWh) | 35.9 ± 13.5 | **39.2** | — |
-| Pinball @ P10 | 12.4 | — | — |
-| Pinball @ P90 | 12.9 | — | — |
-| Improvement vs baseline | — | **+42.2%** | baseline |
-
-**Prediction intervals:** Empirical 80% interval derived from CV fold residuals, calibrated per hour-of-day to capture intraday heteroskedasticity. Achieves 71.4% empirical coverage on the test set (nominal 80%); under-coverage reflects regime-change risk in a particularly volatile Q4 2025.
+**This mattered more than a data-plumbing footnote.** The incomplete fetch is what produced the erroneous r = 0.86 in §4. A production system needs pinned, versioned datasets and explicit coverage assertions *before* modelling, not quality checks after it.
 
 ---
 
-## 4. Prompt Curve Translation (`src/cobblestone/curve/translation.py`)
+## 2. Data quality
 
-Hourly forecasts are aggregated into standard EEX delivery products for weekly and monthly horizons:
+Standard checks (`quality/standard_qa.py`): missingness, duplicates, hourly gaps, domain-bound outliers, monthly coverage.
 
-| Product | Definition (local CET/CEST) |
-|---------|-----------------------------|
-| Baseload | Arithmetic mean of all 24 hours |
-| Peak | Hours 08:00–20:00, Monday–Friday |
-| Off-peak | Remaining hours |
+**LLM-driven QA (`quality/llm_qa.py`):** Claude receives a schema summary and five sample rows and returns 8–12 validation rules as JSON, each an executable Python expression over a single column. The pipeline runs every rule and logs the system prompt, raw response, parsed rules and per-rule violation counts to `outputs/llm_qa_log.json`. Recent runs yield 10–11 rules with all but one passing; the exact set varies between runs, which is itself an argument for executing and auditing rather than trusting any single generation.
 
-**Trading signal logic:**
-```
-fair_value > prompt + MAE  →  LONG prompt month base
-fair_value < prompt − MAE  →  SHORT prompt month base
-else                        →  NEUTRAL
+### 2.1 The rules were wrong, and the pipeline believed them
+
+An early run produced rules of the form:
+
+```python
+s.diff().abs() <= 8000 | s.diff().isna()
 ```
 
-The reference prompt price is derived from the 30-day trailing realized average immediately before the forecast window (proxy for live EEX screen price). The Oct 2025 forecast base is **83.7 EUR/MWh** vs reference **83.5 EUR/MWh** → **NEUTRAL** directional. Peak/base spread **+20.6 EUR/MWh** exceeds the €5 threshold → **buy peak vs base** via EEX shape products.
+Python binds `|` more tightly than `<=`, so this parses as `s.diff().abs() <= (8000 | s.diff().isna())`. The right-hand side collapses to `True` (i.e. 1), so almost every row fails. The pipeline reported **720 violations out of 720 rows** when the true count was **6**.
 
-**Invalidation conditions:**
-1. Unplanned nuclear outage >1 GW announced within 4h of gate closure
-2. Cold snap: load >+15% vs 7-day average
-3. Wind drought: generation <30% of installed capacity for ≥3 consecutive days
-4. Cross-border congestion: DE/FR or DE/NL split >€20/MWh
-5. Out-of-sample MAE >2× training MAE → reduce position to zero
+Two fixes, both retained:
+
+1. The system prompt names the precedence trap explicitly and requires every comparison to be fully parenthesised.
+2. `_execute_rule` marks any rule flagging more than `SUSPECT_VIOLATION_FRACTION` (50%) of rows as **`suspect`** — a malformed rule — rather than reporting it as a data finding.
+
+The second fix is the load-bearing one. The prompt fix depends on the model complying; the guard does not.
 
 ---
 
-## 5. Repository Structure & Setup
+## 3. Forecasting
+
+**Target:** next-day hourly day-ahead price.
+
+**Leakage control:** fundamentals lagged ≥24h; rolling price statistics computed on an already-shifted series. Features for hour *H* contain only what was knowable before gate closure.
+
+**Features (37):** calendar (hour, day-of-week, month, week-of-year, weekend, holiday, sine/cosine encodings); price lags at 24/48/72/168/336h; 24h and 168h rolling mean/std/max/min; wind, solar and load lags at 24h/168h plus 24h rolling means; total renewables lag.
+
+**Baseline:** seasonal naive, `price[t] = price[t−168h]`.
+
+**Model:** LightGBM (800 estimators, lr 0.05, 63 leaves, subsample 0.8); 12 monthly walk-forward folds, expanding training window.
+
+| Metric | CV (mean ± std) | Hold-out | Seasonal naive |
+|---|---|---|---|
+| MAE (EUR/MWh) | 23.9 ± 7.3 | **28.76** | 49.42 |
+| RMSE (EUR/MWh) | 35.3 ± 13.0 | **39.50** | — |
+| Pinball @ P90 | 12.0 | — | — |
+| Improvement | — | **+41.8%** | — |
+
+**Hold-out:** 2025-10-01 → 2025-12-31, 2,208 hours, never seen during development.
+
+**Prediction intervals:** empirical 80% interval from CV fold residuals, calibrated per hour-of-day. Empirical coverage **70.2%** against a nominal 80% — under-covered, reflecting a volatile Q4. Reported rather than tuned away; the confidence gate accounts for it.
+
+---
+
+## 4. The premise test, and why the headline changed
+
+### 4.1 The original thesis
+
+In a merit-order market the clearing price is set by the marginal generator, so abundant wind and solar should push both price and carbon intensity down together. If that holds strongly, a price forecast doubles as a forecast of when the grid is clean.
+
+Carbon intensity is estimated per hour as:
 
 ```
-cobblestone/
-├── run_pipeline.py              # Single entry point
-├── app.py                       # Streamlit dashboard (6 tabs)
-├── src/cobblestone/
-│   ├── ingestion/               # SMARD + ENTSO-E fetchers
-│   ├── quality/                 # Standard QA + LLM QA
-│   ├── features/                # Feature engineering
-│   ├── models/                  # Seasonal naive + LightGBM + walk-forward CV
-│   └── curve/                   # Hourly → delivery-period translation + signal
+renewable_share = (wind_onshore + wind_offshore + solar) / load   clipped to [0, 1]
+intensity       = RESIDUAL_INTENSITY × (1 − renewable_share)
+```
+
+with `RESIDUAL_INTENSITY = 0.60 tCO₂/MWh` approximating Germany's non-renewable residual mix (roughly half coal at ~0.9–1.1, half gas CCGT at ~0.35–0.40). It is a parameter, so the module re-points at another grid.
+
+### 4.2 What the complete data says
+
+An early run reported **r = 0.859**. That run used the incomplete fetch described in §1.1, in which wind onshore was largely missing. With wind absent, `renewable_share` was effectively a solar proxy — and solar is strongly diurnal, so it is strongly anti-correlated with price by construction. Restoring the full wind series, which is Germany's largest renewable source and is *not* diurnal, gives:
+
+| Window | Hours | Pearson r | Cheap tercile renewable | Pricey tercile renewable | CO₂ gap |
+|---|---|---|---|---|---|
+| Full 2022–2025 | 35,061 | **0.398** | 49.8% | 26.0% | 0.143 |
+| Winter months (Oct–Mar) | 17,493 | 0.574 | 61.5% | 27.6% | 0.204 |
+| Summer months (Apr–Sep) | 17,568 | 0.289 | 38.6% | 24.2% | 0.086 |
+| Oct–Dec 2025 (hold-out) | 2,207 | 0.693 | 65.7% | 28.4% | 0.224 |
+
+The relationship is real and positive but **moderate, and strongly seasonal** — not the near-deterministic link the first number implied.
+
+### 4.3 The decomposition that actually matters
+
+Even the surviving correlation is mostly not exploitable, because it lives *between* days rather than *within* them:
+
+| | Renewable share, cheap vs expensive | CO₂ gap | Load shiftable here? |
+|---|---|---|---|
+| Between days (windy vs calm) | 50.3% vs 27.4% | 0.138 t/MWh | **No** |
+| Within a day | 39.2% vs 33.5% | **0.034 t/MWh** | **Yes** |
+
+An operator can move a chiller run from 19:00 to 03:00; they cannot move June demand into April. Only the within-day component is actionable, and its carbon content is small.
+
+**Conclusion:** GridShift is primarily a **cost-optimisation and peak-shaving** tool — ~81 EUR/MWh shifted — with a **modest carbon co-benefit** of ~0.034 tCO₂/MWh. That is a defensible business case. Presenting it as a decarbonisation breakthrough would not be.
+
+---
+
+## 5. Recommendation output (`curve/load_shift.py`)
+
+Hours are banded **within each day** — ranked against the other hours of their own day, not pooled across the window, since pooling would mostly rank days against each other and yield unactionable advice. A clock hour is reported in a band only if it lands there on ≥50% of days.
+
+Hold-out window (2025-10-01 → 2025-12-31):
+
+| Band | Local hours | Mean price | Renewable share |
+|---|---|---|---|
+| **Green** | 00–05, 12, 23 | 64.2 EUR/MWh | 48.7% |
+| **Red** | 07–09, 15–20 | 127.8 EUR/MWh | 41.8% |
+
+Per MWh shifted: **63.6 EUR saved, 0.041 tCO₂ avoided**. At 200 MWh/day of shiftable load: ~4.65M EUR/yr and ~2,990 tCO₂/yr — illustrative, since it assumes flexibility every day at the observed spread.
+
+**Confidence** is gated on *both* forecast accuracy (spread ≥ 1.5× MAE) and the strength of the price/carbon link (r ≥ 0.4). A precise forecast of a signal that does not track carbon is worthless for the carbon claim.
+
+**Override conditions** (any one suspends the recommendation):
+
+1. Renewable share data stale or >6h delayed
+2. Trailing-30-day MAE exceeds 2× hold-out MAE
+3. Trailing-30-day price/carbon correlation below 0.25 — premise broken
+4. A process constraint would be breached (storage limit, minimum output, departure deadline)
+5. The grid operator issues a demand-response instruction
+
+---
+
+## 6. Limitations
+
+- **The carbon case is modest** (§4.3) and seasonal. Lead with cost.
+- **Carbon intensity is derived, not metered.** The correlation shows price tracks *renewable share*; production use needs the operator's published emissions factors.
+- **Source data is unreliable** (§1.1) — pinned datasets and coverage assertions are prerequisites, not niceties.
+- **Prediction intervals under-cover** (70.2% vs nominal 80%) in volatile quarters.
+- **Germany, not the UAE.** Needs revalidation on local data and market rules.
+- **Rebound.** At scale, coordinated shifting into the same hours erodes the spread it depends on.
+
+---
+
+## 7. Repository
+
+```
+gridshift/
+├── run_pipeline.py                 # single entry point
+├── app.py                          # Streamlit dashboard
+├── PROPOSAL.md                     # one-page submission
+├── src/gridshift/
+│   ├── ingestion/                  # SMARD + ENTSO-E fetchers
+│   ├── quality/                    # standard QA + LLM QA with suspect-rule guard
+│   ├── features/engineer.py        # leakage-controlled feature engineering
+│   ├── models/                     # seasonal naive + LightGBM + walk-forward CV
+│   └── curve/
+│       ├── translation.py          # hourly → delivery blocks (decision-free)
+│       └── load_shift.py           # premise check + within-day banding + impact
 └── outputs/
-    ├── qa_report.json  llm_qa_log.json  trading_signal.json
+    ├── qa_report.json  llm_qa_log.json  load_shift_plan.json
     ├── delivery_views.csv  submission.csv
-    └── figures/  (5 publication-quality figures)
+    └── figures/
 ```
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[notebook]"
-cp .env.example .env          # add ANTHROPIC_API_KEY (required for LLM QA)
-python run_pipeline.py        # generates all outputs; data cached after first fetch
-streamlit run app.py          # interactive dashboard
+pip install -e .
+cp .env.example .env          # add ANTHROPIC_API_KEY for the LLM QA step
+python run_pipeline.py        # uses the pinned cache; FORCE_REFETCH=false
+streamlit run app.py
 ```
-
-`submission.csv` contains out-of-sample predictions for Oct–Dec 2025 with columns `id` (UTC timestamp), `y_pred`, `y_pred_p10`, `y_pred_p90`.

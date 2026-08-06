@@ -1,9 +1,12 @@
-# European Power Fair-Value Forecasting Pipeline
+# GridShift — Scheduling Flexible Electricity Demand
 
 **Sneha Sunil · snehasunil385@gmail.com**
 
-End-to-end prototype for the Cobblestone Energy Graduate ADE case study:
-**European Power Fair Value — Forecasting Day-Ahead and Translating to Prompt Curve Views**
+Forecast tomorrow's hourly electricity prices and tell operators of flexible demand — district cooling, desalination, EV fleets, data centres — which hours to run in.
+
+**On the carbon claim:** the original thesis was that price is a strong proxy for carbon intensity via the merit-order effect. The pipeline tests this on every run rather than assuming it, and on complete data it only partly holds: **r = 0.398** over 2022–2025, and most of that lives *between* days rather than within them, where load can actually be shifted. GridShift is therefore primarily a **cost-optimisation and peak-shaving** tool with a **modest carbon co-benefit**. See §4 of `REPORT.md` for the full correction — an earlier r = 0.86 turned out to be an artifact of missing wind data.
+
+See `PROPOSAL.md` for the one-page write-up and `REPORT.md` for the full technical report.
 
 ---
 
@@ -11,231 +14,96 @@ End-to-end prototype for the Cobblestone Energy Graduate ADE case study:
 
 | Step | Module | Description |
 |------|--------|-------------|
-| 1 | `ingestion/` | Hourly DE DA prices + wind/solar/load from SMARD (no key) or ENTSO-E |
+| 1 | `ingestion/` | Hourly DE price, load and wind/solar from SMARD (no key) or ENTSO-E |
 | 2a | `quality/standard_qa.py` | Missingness, duplicates, hourly gaps, domain-bound outliers |
-| 2b | `quality/llm_qa.py` | **AI component**: Claude proposes & executes domain-specific QA rules |
-| 3 | `features/engineer.py` | Calendar, lag, rolling, and fundamental features (strict leakage control) |
-| 4 | `models/` | Seasonal naive baseline + LightGBM with walk-forward CV |
-| 5 | `curve/translation.py` | Hourly forecasts → Base/Peak blocks → prompt curve trading signal |
+| 2b | `quality/llm_qa.py` | **AI component**: Claude proposes executable QA rules; the pipeline runs and audits them |
+| 3 | `features/engineer.py` | Calendar, lag and renewable features under strict leakage control |
+| 4 | `models/` | Seasonal-naive baseline + LightGBM with 12-fold walk-forward CV |
+| 5 | `curve/load_shift.py` | Premise check → green/amber/red hour banding → shift recommendation |
+
+---
+
+## Results
+
+| | |
+|---|---|
+| Forecast error (hold-out, 2,208 h) | **28.76 EUR/MWh MAE** — **41.8% better** than seasonal naive (49.42) |
+| Cross-validation | 12 walk-forward folds, MAE 23.9 ± 7.3 |
+| Prediction interval | 80% nominal, 70.2% empirical coverage (under-covered; reported, not tuned away) |
+| Price ↔ carbon correlation | **r = 0.398** full period · 0.693 in the hold-out window |
+| Green hours (shift into) | **00–05, 12, 23** · 64.2 EUR/MWh |
+| Red hours (shift out of) | **07–09, 15–20** · 127.8 EUR/MWh |
+| Impact per MWh shifted | **~81 EUR saved · ~0.034 tCO₂ avoided** (within-day, 2022–2025) |
 
 ---
 
 ## Setup
 
 ```bash
-# 1. Clone and create environment
 python -m venv .venv && source .venv/bin/activate
+pip install -e .
 
-# 2. Install dependencies
-pip install -e ".[notebook]"
-
-# 3. Configure API keys
 cp .env.example .env
-# Edit .env:  add ANTHROPIC_API_KEY (required for LLM QA)
-#             add ENTSOE_API_KEY (optional; falls back to SMARD)
-#             set FORCE_REFETCH=true to bypass cached data and re-fetch from source
+# ANTHROPIC_API_KEY  — required for the LLM QA step
+# ENTSOE_API_KEY     — optional; falls back to SMARD
+# FORCE_REFETCH      — leave false; see the data-source caveat below
+```
+
+```bash
+python run_pipeline.py     # uses the pinned cache in data/raw/
+streamlit run app.py       # interactive dashboard over the outputs
 ```
 
 ---
 
-## Running the pipeline
+## AI component
 
-```bash
-# Full pipeline (ingest → QA → features → model → curve)
-python run_pipeline.py
+`src/gridshift/quality/llm_qa.py` calls Claude (`claude-haiku-4-5`) with a schema summary and five sample rows, and asks for 8–12 validation rules as JSON. Each rule carries a Python expression evaluated against a single column. The pipeline executes every rule and writes the system prompt, raw response, parsed rules and per-rule violation counts to `outputs/llm_qa_log.json`.
 
-# First run fetches ~4 years of hourly data from SMARD (~30s–2min depending on network).
-# Subsequent runs load from data/raw/de_power_market.parquet (instant).
-```
+**The pipeline does not trust the model.** An early run produced rules of the form `s.diff().abs() <= 8000 | s.diff().isna()`. Python binds `|` more tightly than `<=`, so this evaluates as `s.diff().abs() <= (8000 | ...)`, the right side collapses to `True`, and nearly every row "fails" — 720 reported violations against a true count of 6. Two fixes are in place: the system prompt names the precedence trap and requires full parenthesisation, and `_execute_rule` marks any rule flagging more than 50% of rows as **`suspect`** rather than reporting it as a data-quality finding. The guard is the load-bearing one, since it does not depend on the model complying.
 
-### Interactive Dashboard
-
-After running the pipeline, launch the Streamlit dashboard to explore all outputs interactively:
-
-```bash
-streamlit run app.py
-```
-
-The dashboard has six tabs:
-
-| Tab | What it shows |
-|-----|---------------|
-| **Overview** | Pipeline summary, dataset metadata, data source table |
-| **Data Quality** | Standard QA report (missing %, outliers, gaps) + LLM-generated rule results |
-| **Model** | Walk-forward CV metrics table, hold-out test performance, CV and feature-importance figures |
-| **Trading Signal** | Directional signal, confidence band, peak/base spread, desk actions and invalidation conditions |
-| **Forecast** | Interactive daily chart of Oct–Dec 2025 predictions with 80% prediction interval; download button for `submission.csv` |
-| **Figures** | All five publication figures rendered side-by-side |
-
-The sidebar shows a live summary: dataset date range, LightGBM test MAE, and the current directional signal (long / short / neutral).
+API keys are read from environment variables only; `.env` is gitignored.
 
 ---
 
-### Outputs
+## Data sources
+
+**Primary (no key): SMARD — Bundesnetzagentur**
+
+| Column | Filter | Description |
+|---|---|---|
+| `price_da_eur_mwh` | 4169 | EPEX Spot day-ahead auction |
+| `load_mwh` | 4381 | Realised grid load |
+| `wind_onshore_mwh` | 4066 | Realised onshore wind |
+| `wind_offshore_mwh` | 4065 | Realised offshore wind |
+| `solar_mwh` | 4067 | Realised solar PV |
+
+**Known limitation — the source is not reproducible run-to-run.** Repeated fetches of the same date range returned materially different coverage: one run lost `load` entirely (62.6% missing), another lost `wind_onshore` after 2024-12-31, another returned HTTP 404 for `wind_offshore`. The canonical dataset was assembled by taking the most complete version of each series across fetches, and `FORCE_REFETCH=false` pins that cache. This is not a footnote: the incomplete fetch is what produced the erroneous r = 0.86. Production needs pinned, versioned datasets and coverage assertions *before* modelling.
+
+**Alternative (with key): ENTSO-E Transparency Platform** — register at https://transparency.entsoe.eu/usrm/user/createPublicUser. DA prices A44/A01, load A65, wind/solar A75 with psrType B19/B18/B16, domain DE-LU (`10Y1001A1001A82H`). The client splits multi-year ranges into annual chunks automatically. To switch an existing install, set `FORCE_REFETCH=true` for one run.
+
+---
+
+## Methodology notes
+
+**Leakage control.** Raw fundamentals are always lagged ≥24h and rolling statistics are computed on an already-shifted series, so the features for hour *H* contain only what was knowable before day-ahead gate closure.
+
+**Validation.** 12 monthly walk-forward folds with an expanding training window; no data from a validation month reaches training. Metrics: MAE (primary), RMSE, pinball loss at P10/P90.
+
+**Within-day banding.** Hours are ranked against the other hours of their own day, not across the whole window — an operator can move a chiller run from 19:00 to 03:00 but cannot move June demand into April. A clock hour is only reported in a band if it lands there on at least half of days. This distinction is what reduces the headline carbon figure: the between-day CO₂ gap is 0.138 t/MWh, but only the within-day 0.034 t/MWh is actionable.
+
+**Timezone.** All timestamps stored UTC; calendar features and reported clock hours derived via `tz_convert("Europe/Berlin")`, handling CET↔CEST correctly.
+
+---
+
+## Outputs
 
 ```
 outputs/
-├── qa_report.json          # Standard QA + model performance metrics
-├── llm_qa_log.json         # Full LLM prompt, response, rule execution log
-├── trading_signal.json     # DA→curve view with invalidation conditions
-├── delivery_views.csv      # Weekly Base/Peak/Offpeak forecast bands
-├── submission.csv          # Out-of-sample hourly predictions (id, y_pred)
-└── figures/
-    ├── fig1_price_renewables.png   # DA price + wind/solar time series
-    ├── fig2_cv_performance.png     # Walk-forward CV actual vs forecast
-    ├── fig3_feature_importance.png # LightGBM feature importances
-    ├── fig4_price_heatmap.png      # Price by hour × month heatmap
-    └── fig5_model_comparison.png   # Baseline vs LightGBM comparison
-```
-
----
-
-## Data Sources
-
-### Primary (no key): SMARD – Bundesnetzagentur
-- URL: `https://www.smard.de/app/chart_data/{filter}/{region}/`
-- Granularity: 15-min, resampled to hourly
-- Series fetched:
-
-| Column | Filter ID | Description |
-|--------|-----------|-------------|
-| `price_da_eur_mwh` | 4169 | EPEX Spot Day-Ahead auction (€/MWh) |
-| `wind_onshore_mwh` | 4066 | Realised wind onshore generation |
-| `wind_offshore_mwh` | 4065 | Realised wind offshore generation |
-| `solar_mwh` | 4067 | Realised solar PV generation |
-| `load_mwh` | 4381 | Realised grid load (total consumption) |
-
-### Alternative (with key): ENTSO-E Transparency Platform
-Register at: https://transparency.entsoe.eu/usrm/user/createPublicUser
-
-| Series | Document type | Domain |
-|--------|---------------|--------|
-| DA prices | A44 + `contract_MarketAgreement.type=A01` | DE-LU (10Y1001A1001A82H) |
-| Actual load | A65 | DE-LU |
-| Wind onshore | A75 / B19 | DE-LU |
-| Wind offshore | A75 / B18 | DE-LU |
-| Solar | A75 / B16 | DE-LU |
-
-**Note:** The ENTSO-E API limits each request to **one calendar year**. The client (`entsoe_client.py`) automatically splits multi-year date ranges into annual chunks. To switch from SMARD to ENTSO-E on an existing installation, set `FORCE_REFETCH=true` in `.env` for the first run, then revert to `false`.
-
-Full Postman documentation: see `docs/entsoe_postman.json`
-
----
-
-## Timezone / DST Handling
-
-All timestamps are stored in **UTC** throughout the pipeline. The SMARD API
-returns millisecond epoch UTC timestamps. Calendar features (hour of day,
-peak/off-peak flag) are derived from `Europe/Berlin` local time using
-`pandas.DatetimeIndex.tz_convert`, which correctly handles the CET↔CEST
-transition (last Sunday of March / October).
-
----
-
-## Forecasting Methodology
-
-### Target
-Next-day hourly DA price (EUR/MWh) — Option A from the case study.
-
-### Leakage control
-Raw fundamental columns (wind, solar, load) are always lagged ≥ 24 h in the
-feature matrix. The only information in X for hour H is what would have been
-known **before gate closure** of the DA auction for day D+1.
-
-### Validation
-Walk-forward (blocked) CV — 12 monthly folds, training window expands
-chronologically. No data from the validation month touches training.
-
-### Metrics
-- MAE (EUR/MWh) — primary level metric  
-- RMSE — penalises large errors (relevant for extreme price events)  
-- Pinball @ 10th + 90th percentile — tail coverage quality
-
-### Models
-| Model | Description |
-|-------|-------------|
-| Seasonal Naive | `price[t] = price[t - 168h]` — same hour last week |
-| LightGBM | Gradient-boosted trees; calendar + lag + fundamental features |
-
----
-
-## AI Component (LLM-Accelerated QA)
-
-`src/cobblestone/quality/llm_qa.py`
-
-Claude (`claude-haiku-4-5`) is called to propose validation rules
-for the power market dataset:
-
-1. The pipeline constructs a schema description (column stats + 5 sample rows)
-2. A system prompt explains the DE power market context and asks for
-   domain-specific JSON rules (physical limits, market realism, temporal jumps)
-3. Claude returns 8–12 rules as structured JSON
-4. The pipeline executes each rule against the full dataset using `eval()`
-5. All prompts, raw responses, parsed rules, execution results, and
-   any failures are written to `outputs/llm_qa_log.json`
-
-API key is read from the `ANTHROPIC_API_KEY`
-environment variable (`.env` file is in `.gitignore`).
-
----
-
-## Prompt Curve Translation
-
-`src/cobblestone/curve/translation.py`
-
-Hourly DA forecasts are converted to:
-
-| Product | Definition |
-|---------|------------|
-| Base | Arithmetic mean of all 24 h |
-| Peak | Mean of hours 08–19 (local CET/CEST), Mon–Fri |
-| Off-peak | Remaining hours |
-
-The trading signal compares the base fair value against a hypothetical
-prompt month price. Position sizing is inversely proportional to the
-`p90–p10` forecast band width.
-
-**Invalidation conditions** (any of these should override the signal):
-- Unplanned nuclear outage > 1 GW within 4 h of gate closure
-- Cold snap causing load > +15% vs forecast
-- Wind drought (< 30% installed capacity for ≥ 3 consecutive days)
-- Cross-border congestion causing zone split > €20/MWh from FR/NL
-- Model MAE deteriorating > 2× the training-period MAE
-
----
-
-## Project Structure
-
-```
-cobblestone/
-├── run_pipeline.py                # Entry point
-├── pyproject.toml
-├── .env.example
-├── data/
-│   ├── raw/                       # Cached SMARD/ENTSO-E parquet
-│   └── processed/                 # Feature matrix parquet
-├── outputs/
-│   ├── figures/                   # 5 publication-ready figures
-│   ├── qa_report.json
-│   ├── llm_qa_log.json
-│   ├── trading_signal.json
-│   ├── delivery_views.csv
-│   └── submission.csv
-└── src/cobblestone/
-    ├── config.py
-    ├── pipeline.py                # Orchestrator
-    ├── plots.py
-    ├── ingestion/
-    │   ├── smard.py               # No-auth SMARD fetcher
-    │   └── entsoe_client.py       # ENTSO-E fetcher (needs key)
-    ├── quality/
-    │   ├── standard_qa.py         # Rule-based QA checks
-    │   └── llm_qa.py              # AI-powered QA (GPT-4o-mini)
-    ├── features/
-    │   └── engineer.py            # Feature engineering
-    ├── models/
-    │   ├── baseline.py            # Seasonal naive
-    │   └── forecaster.py          # LightGBM + walk-forward CV
-    └── curve/
-        └── translation.py         # DA → prompt curve signal
+├── qa_report.json          # standard QA + model performance
+├── llm_qa_log.json         # full LLM prompt, response and rule execution log
+├── load_shift_plan.json    # premise check, green/red windows, impact, overrides
+├── delivery_views.csv      # weekly/monthly base/peak/offpeak blocks
+├── submission.csv          # hourly out-of-sample predictions with P10/P90
+└── figures/                # 5 figures
 ```

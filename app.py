@@ -1,5 +1,5 @@
 """
-Streamlit dashboard for the European Power Fair-Value Forecasting Pipeline.
+Streamlit dashboard for GridShift — carbon-aware load shifting.
 Run with:  streamlit run app.py
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ def _load_csv(path: Path) -> pd.DataFrame | None:
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="EU Power Fair-Value Dashboard",
+    page_title="GridShift Dashboard",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -40,7 +40,7 @@ st.set_page_config(
 # ── Load data ─────────────────────────────────────────────────────────────────
 qa = _load_json(OUTPUTS / "qa_report.json")
 llm_log = _load_json(OUTPUTS / "llm_qa_log.json")
-signal = _load_json(OUTPUTS / "trading_signal.json")
+signal = _load_json(OUTPUTS / "load_shift_plan.json")
 delivery = _load_csv(OUTPUTS / "delivery_views.csv")
 submission = _load_csv(OUTPUTS / "submission.csv")
 
@@ -49,8 +49,8 @@ overview = qa.get("overview", {})
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("⚡ EU Power Fair Value")
-    st.caption("German Day-Ahead · DE-LU bidding zone")
+    st.title("⚡ GridShift")
+    st.caption("Carbon-aware load shifting · DE-LU bidding zone")
     st.divider()
 
     if overview:
@@ -67,11 +67,15 @@ with st.sidebar:
         st.metric("vs Baseline", f"{perf.get('lgbm_improvement_over_baseline_pct', '—')}% better")
 
     st.divider()
-    direction = signal.get("direction", "")
-    color = {"long": "🟢", "short": "🔴", "neutral": "⚪"}.get(direction, "⚪")
-    st.markdown(f"**Signal: {color} {direction.upper()}**")
-    if signal.get("forecast_base_eur_mwh"):
-        st.write(f"Fair value: **{signal['forecast_base_eur_mwh']:.1f} €/MWh**")
+    conf = signal.get("confidence", "")
+    color = {"high": "🟢", "medium": "🟡", "low": "⚪"}.get(conf, "⚪")
+    st.markdown(f"**Confidence: {color} {conf.upper()}**")
+    _g = signal.get("green_window", {})
+    if _g.get("local_hours"):
+        st.write(f"Shift into **{_g['local_hours'][0]:02d}:00–{_g['local_hours'][-1]:02d}:00**")
+    _lnk = signal.get("price_carbon_link", {})
+    if _lnk.get("pearson_r") is not None:
+        st.write(f"Price/carbon r: **{_lnk['pearson_r']}**")
     st.divider()
     st.caption("Sneha Sunil · snehasunil385@gmail.com")
 
@@ -81,7 +85,7 @@ tab_overview, tab_qa, tab_model, tab_signal, tab_forecast, tab_figures = st.tabs
     "📋 Overview",
     "🔍 Data Quality",
     "📈 Model",
-    "📡 Trading Signal",
+    "🟢 Load Shift",
     "🔮 Forecast",
     "🖼 Figures",
 ])
@@ -91,8 +95,8 @@ tab_overview, tab_qa, tab_model, tab_signal, tab_forecast, tab_figures = st.tabs
 # TAB 1 — OVERVIEW
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_overview:
-    st.header("European Power Fair-Value Forecasting Pipeline")
-    st.caption("German Day-Ahead electricity price forecasting with prompt curve translation")
+    st.header("GridShift — Carbon-Aware Load Shifting")
+    st.caption("Forecasting when the grid is clean, so flexible demand can run then instead")
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -117,22 +121,24 @@ with tab_overview:
         st.markdown("""
         1. **Data ingestion** — SMARD API (no auth) for DE-LU market
         2. **Standard QA** — missingness, gaps, domain-bound checks
-        3. **LLM QA** — GPT-4o-mini proposes & executes validation rules
-        4. **Feature engineering** — 31 features, strict 24h leakage control
+        3. **LLM QA** — Claude proposes validation rules; pipeline executes and audits them
+        4. **Feature engineering** — 37 features, strict 24h leakage control
         5. **Forecasting** — Seasonal Naive baseline + LightGBM (12-fold walk-forward CV)
         6. **Prediction intervals** — empirical P10/P90 from CV residuals, calibrated by hour
-        7. **Curve translation** — hourly → Base/Peak/Offpeak weekly + monthly views
+        7. **Load shift** — validate price/carbon link, then band each day green/amber/red
         """)
     with col_b:
         st.subheader("Data sources")
         src_df = pd.DataFrame([
             {"Series": "Day-Ahead price", "Source": "SMARD", "Filter": "4169", "Coverage": "100%"},
-            {"Series": "Wind onshore", "Source": "SMARD", "Filter": "4066", "Coverage": "100%"},
-            {"Series": "Solar (PV)", "Source": "SMARD", "Filter": "4067", "Coverage": "100%"},
-            {"Series": "Load (consumption)", "Source": "SMARD", "Filter": "4381", "Coverage": "37% ⚠️"},
+            {"Series": "Load (consumption)", "Source": "SMARD", "Filter": "4381", "Coverage": "100%"},
+            {"Series": "Wind onshore", "Source": "SMARD", "Filter": "4066", "Coverage": "88% ⚠️"},
+            {"Series": "Wind offshore", "Source": "SMARD", "Filter": "4065", "Coverage": "100%"},
+            {"Series": "Solar (PV)", "Source": "SMARD", "Filter": "4067", "Coverage": "88% ⚠️"},
         ])
         st.dataframe(src_df, hide_index=True, use_container_width=True)
-        st.caption("Load filter returned unreliable data; dropped from features (documented in QA report).")
+        st.caption("SMARD returns no wind onshore or solar data after July 2025, which truncates the "
+                   "usable feature matrix to 2025-07-10. Documented in qa_report.json.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -183,7 +189,8 @@ with tab_qa:
 
     st.divider()
     st.subheader("AI-Accelerated QA (LLM Rule Generation)")
-    st.caption("GPT-4o-mini proposed domain-aware validation rules; pipeline executed them automatically.")
+    st.caption("Claude proposed domain-aware validation rules; the pipeline executed and audited them. "
+               "Rules flagging >50% of rows are quarantined as malformed rather than reported as data failures.")
 
     if not llm_log:
         st.warning("No llm_qa_log.json found. Run pipeline with a valid ANTHROPIC_API_KEY.")
@@ -284,52 +291,78 @@ with tab_model:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — TRADING SIGNAL
+# TAB 4 — LOAD SHIFT
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_signal:
-    st.header("Prompt Curve Trading Signal")
+    st.header("Carbon-Aware Load Shift")
 
     if not signal:
-        st.warning("No trading_signal.json found. Run the pipeline first.")
+        st.warning("No load_shift_plan.json found. Run the pipeline first.")
     else:
-        direction = signal.get("direction", "neutral")
-        badge_color = {"long": "green", "short": "red", "neutral": "gray"}.get(direction, "gray")
-        badge_emoji = {"long": "🟢", "short": "🔴", "neutral": "⚪"}.get(direction, "⚪")
+        link = signal.get("price_carbon_link", {})
+        green = signal.get("green_window", {})
+        red = signal.get("red_window", {})
+        impact = signal.get("impact_per_mwh_shifted", {})
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Signal", f"{badge_emoji} {direction.upper()}")
-        col2.metric("Fair Value (Base)", f"{signal.get('forecast_base_eur_mwh', '—')} €/MWh")
-        band = signal.get("confidence_band", [None, None])
-        col3.metric("80% Band", f"[{band[0]}, {band[1]}] €/MWh" if band[0] else "—")
-        col4.metric("Band Width", f"{signal.get('band_width_eur_mwh', '—')} €/MWh",
-                    help="Narrower = higher conviction = larger position size")
+        st.subheader("Premise check — does price actually track carbon?")
+        st.caption(
+            "Everything below is conditional on this holding. The pipeline re-tests it on every run "
+            "and reports low confidence if the relationship weakens."
+        )
+        if link.get("status") == "ok":
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Correlation (Pearson r)", f"{link.get('pearson_r', '—')}")
+            c2.metric("Hours tested", f"{link.get('n_hours', 0):,}")
+            c3.metric("Cheapest third", f"{link.get('mean_renewable_share_cheapest_tercile', 0):.0%} renewable")
+            c4.metric("Priciest third", f"{link.get('mean_renewable_share_priciest_tercile', 0):.0%} renewable")
+        else:
+            st.warning(f"Premise could not be validated: {link.get('reason', 'unknown')}")
 
-        if signal.get("peak_spread"):
-            ps = signal["peak_spread"]
-            st.info(f"**Peak/Base spread:** {ps.get('peak_vs_base_spread_eur_mwh', '—')} €/MWh → {ps.get('action', '')}")
+        st.divider()
+        st.subheader("Recommendation")
+        conf = signal.get("confidence", "low")
+        badge = {"high": "🟢", "medium": "🟡", "low": "⚪"}.get(conf, "⚪")
 
-        st.subheader("Reasoning")
-        for r in signal.get("reasoning", []):
-            st.write(f"• {r}")
+        col_g, col_r = st.columns(2)
+        with col_g:
+            st.success(f"**🟢 Shift INTO** local hours {green.get('local_hours', [])}")
+            st.write(f"Mean price: **{green.get('mean_price_eur_mwh', '—')} €/MWh**")
+            st.write(f"Renewable share: **{green.get('mean_renewable_share', 0):.1%}**")
+            st.write(f"Carbon intensity: **{green.get('mean_intensity_t_per_mwh', '—')} tCO₂/MWh**")
+        with col_r:
+            st.error(f"**🔴 Shift OUT OF** local hours {red.get('local_hours', [])}")
+            st.write(f"Mean price: **{red.get('mean_price_eur_mwh', '—')} €/MWh**")
+            st.write(f"Renewable share: **{red.get('mean_renewable_share', 0):.1%}**")
+            st.write(f"Carbon intensity: **{red.get('mean_intensity_t_per_mwh', '—')} tCO₂/MWh**")
 
-        col_act, col_inv = st.columns(2)
-        with col_act:
-            st.subheader("Desk actions")
-            for a in signal.get("desk_actions", []):
-                st.write(f"✅ {a}")
-        with col_inv:
-            st.subheader("Invalidation conditions")
-            for c in signal.get("invalidation_conditions", []):
-                st.write(f"✗ {c}")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Saved per MWh shifted", f"{impact.get('cost_saving_eur', '—')} €")
+        m2.metric("CO₂ avoided per MWh", f"{impact.get('co2_avoided_t', '—')} t")
+        m3.metric("Confidence", f"{badge} {conf.upper()}",
+                  help="Gated on both forecast accuracy and the strength of the price/carbon link")
+
+        scaled = signal.get("illustrative_scale_up") or {}
+        if scaled:
+            st.info(
+                f"**Illustrative scale-up** — at {scaled.get('shiftable_mwh_per_day')} MWh/day of genuinely "
+                f"shiftable load: **{scaled.get('annual_cost_saving_eur', 0):,} €/yr** and "
+                f"**{scaled.get('annual_co2_avoided_t', 0):,} tCO₂/yr**. Assumes that flexibility is available "
+                "year-round at the spread observed in this window — winter would not sustain it."
+            )
+
+        st.subheader("Override conditions")
+        st.caption("Any one of these suspends the recommendation.")
+        for c in signal.get("override_conditions", []):
+            st.write(f"✗ {c}")
 
     st.divider()
     st.subheader("Delivery Period Views")
-    st.caption("Weekly + monthly Base / Peak / Off-peak forecasts derived from hourly predictions")
+    st.caption("Weekly + monthly Base / Peak / Off-peak blocks derived from hourly predictions")
 
     if delivery is not None and not delivery.empty:
         base_views = delivery[delivery["product_type"] == "base"].copy()
         base_views = base_views[["period_label", "forecast_mean_eur_mwh", "forecast_p10", "forecast_p90", "n_hours"]]
-        base_views.columns = ["Period", "Fair Value (€/MWh)", "P10 (€/MWh)", "P90 (€/MWh)", "Hours"]
+        base_views.columns = ["Period", "Forecast (€/MWh)", "P10 (€/MWh)", "P90 (€/MWh)", "Hours"]
 
         st.markdown("**Base (all hours)**")
         st.dataframe(base_views, hide_index=True, use_container_width=True)
