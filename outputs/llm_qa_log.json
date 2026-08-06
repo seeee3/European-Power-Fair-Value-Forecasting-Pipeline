@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-08-06T04:15:48.746861+00:00",
+  "timestamp": "2026-08-06T06:13:40.330624+00:00",
   "model": "claude-haiku-4-5",
   "system_prompt": "You are a data engineer validating a European power market dataset.\nYou will receive a description of a power market dataset (schema, statistics,\nand sample rows) and must return a JSON array of validation rules.\n\nEach rule must have these fields:\n  \"name\"        : unique snake_case identifier\n  \"description\" : one-sentence explanation of what it checks\n  \"column\"      : which DataFrame column it applies to (or \"index\")\n  \"severity\"    : \"error\" | \"warning\"\n  \"expression\"  : a Python expression using variable `s` (a pd.Series of the column values,\n                  already dropna applied) that evaluates to a boolean Series.\n                  True = row passes the check.  Example: `s > 0`\n\nReturn ONLY a JSON array with no commentary before or after.\nGenerate 8-12 rules covering:\n  - Physical feasibility (generation cannot be negative; load has realistic bounds)\n  - Market realism (price spikes and crashes; negative prices ARE valid in DE market)\n  - Temporal consistency (large jumps between consecutive hours)\n  - Cross-series sanity (high wind => typically lower prices)\n\nRules MUST be executable Python expressions. Do not use custom functions.\nIMPORTANT: Each rule receives only ONE column via `s`. You cannot reference\nother columns inside an expression. Do not attempt cross-series checks\n(e.g. checking wind generation when writing a price rule) \u2014 the other\ncolumn is not in scope. Write univariate rules only.\n\nCRITICAL \u2014 operator precedence: in Python `|` and `&` bind MORE tightly than\nthe comparison operators, so `s.diff().abs() <= 150 | s.diff().isna()` is\nsilently parsed as `s.diff().abs() <= (150 | s.diff().isna())`, which is not\nwhat you mean. Fully parenthesise EVERY comparison before combining it:\n  CORRECT:   (s.diff().abs() <= 150) | (s.diff().isna())\n  WRONG:      s.diff().abs() <= 150  |  s.diff().isna()\n\nRules must pass on well-formed data. A rule that flags most rows is a bug in\nthe rule, not a finding \u2014 calibrate thresholds against the supplied statistics.",
   "user_prompt": "Dataset: Hourly European power market data for Germany (DE-LU bidding zone).\n        Index: UTC hourly timestamps.\n\n        Schema and statistics:\n          price_da_eur_mwh: dtype=float64, non_null=720, min=3.52, max=308.35, mean=93.46, std=30.01\n  load_mwh: dtype=float64, non_null=719, min=40602.07, max=74602.28, mean=57229.83, std=8985.96\n  wind_onshore_mwh: dtype=float64, non_null=720, min=3695.61, max=4967.76, mean=4332.88, std=292.06\n  wind_offshore_mwh: dtype=float64, non_null=719, min=135.66, max=8278.07, mean=4570.26, std=2258.66\n  solar_mwh: dtype=float64, non_null=720, min=676.79, max=37726.59, mean=16702.88, std=8724.46\n\n        Sample rows (first 5):\n                    utc_timestamp  price_da_eur_mwh     load_mwh  wind_onshore_mwh  wind_offshore_mwh  solar_mwh\n2025-12-02 00:00:00+00:00           58.8200 52546.863780           3742.38         5830.65500   27972.52\n2025-12-02 01:00:00+00:00           54.9350 51835.864757           3727.32         6034.25525   27533.51\n2025-12-02 02:00:00+00:00           53.7325 52316.345385           3730.23         6047.04475   27606.55\n2025-12-02 03:00:00+00:00           50.4675 53637.943665           3787.65         6134.69075   27734.91\n2025-12-02 04:00:00+00:00           64.5850 57434.320150           3834.61         6231.46200   28146.02\n\n        Please generate validation rules for this dataset.",
-  "raw_response": "```json\n[\n  {\n    \"name\": \"price_non_negative\",\n    \"description\": \"Day-ahead price must be non-negative (negative prices are valid in German market but should be >= -500 EUR/MWh as physical floor).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s >= -500\"\n  },\n  {\n    \"name\": \"price_reasonable_upper_bound\",\n    \"description\": \"Day-ahead price should not exceed 1000 EUR/MWh (extreme but physically possible spike threshold).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s <= 1000\"\n  },\n  {\n    \"name\": \"load_positive\",\n    \"description\": \"Load must be strictly positive (cannot have negative electricity demand).\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s > 0\"\n  },\n  {\n    \"name\": \"load_within_realistic_bounds\",\n    \"description\": \"Load should remain within 30000-85000 MWh range for German bidding zone (based on historical norms).\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s >= 30000) & (s <= 85000)\"\n  },\n  {\n    \"name\": \"wind_onshore_non_negative\",\n    \"description\": \"Onshore wind generation cannot be negative.\",\n    \"column\": \"wind_onshore_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= 0\"\n  },\n  {\n    \"name\": \"wind_offshore_non_negative\",\n    \"description\": \"Offshore wind generation cannot be negative.\",\n    \"column\": \"wind_offshore_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= 0\"\n  },\n  {\n    \"name\": \"solar_non_negative\",\n    \"description\": \"Solar generation cannot be negative.\",\n    \"column\": \"solar_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= 0\"\n  },\n  {\n    \"name\": \"solar_realistic_maximum\",\n    \"description\": \"Solar generation should not exceed 45000 MWh (physical capacity constraint for DE-LU zone).\",\n    \"column\": \"solar_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s <= 45000\"\n  },\n  {\n    \"name\": \"price_hourly_jump_moderate\",\n    \"description\": \"Hour-to-hour price changes should not exceed 200 EUR/MWh (flags extreme volatility).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.diff().abs() <= 200) | (s.diff().isna())\"\n  },\n  {\n    \"name\": \"load_hourly_jump_moderate\",\n    \"description\": \"Hour-to-hour load changes should not exceed 5000 MWh (flags implausible ramps).\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.diff().abs() <= 5000) | (s.diff().isna())\"\n  },\n  {\n    \"name\": \"wind_onshore_hourly_jump_moderate\",\n    \"description\": \"Hour-to-hour onshore wind changes should not exceed 800 MWh (flags implausible ramps).\",\n    \"column\": \"wind_onshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.diff().abs() <= 800) | (s.diff().isna())\"\n  },\n  {\n    \"name\": \"wind_offshore_hourly_jump_moderate\",\n    \"description\": \"Hour-to-hour offshore wind changes should not exceed 2000 MWh (higher volatility expected).\",\n    \"column\": \"wind_offshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.diff().abs() <= 2000) | (s.diff().isna())\"\n  }\n]\n```",
+  "raw_response": "```json\n[\n  {\n    \"name\": \"price_non_negative\",\n    \"description\": \"Day-ahead price must be non-negative (negative prices are valid in German market but should be >= -500 EUR/MWh as physical floor).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= -500\"\n  },\n  {\n    \"name\": \"price_reasonable_upper_bound\",\n    \"description\": \"Day-ahead price should not exceed 1000 EUR/MWh (extreme but physically possible spike limit).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"s <= 1000\"\n  },\n  {\n    \"name\": \"load_positive\",\n    \"description\": \"Load must be strictly positive (cannot have negative electricity demand).\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s > 0\"\n  },\n  {\n    \"name\": \"load_within_realistic_bounds\",\n    \"description\": \"Load should stay within 30000-85000 MWh range for German bidding zone.\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s >= 30000) & (s <= 85000)\"\n  },\n  {\n    \"name\": \"wind_onshore_non_negative\",\n    \"description\": \"Onshore wind generation cannot be negative.\",\n    \"column\": \"wind_onshore_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= 0\"\n  },\n  {\n    \"name\": \"wind_offshore_non_negative\",\n    \"description\": \"Offshore wind generation cannot be negative.\",\n    \"column\": \"wind_offshore_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= 0\"\n  },\n  {\n    \"name\": \"solar_non_negative\",\n    \"description\": \"Solar generation cannot be negative.\",\n    \"column\": \"solar_mwh\",\n    \"severity\": \"error\",\n    \"expression\": \"s >= 0\"\n  },\n  {\n    \"name\": \"price_hourly_jump_reasonable\",\n    \"description\": \"Hour-to-hour price change should not exceed 200 EUR/MWh (flags extreme volatility).\",\n    \"column\": \"price_da_eur_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.diff().abs() <= 200) | (s.diff().isna())\"\n  },\n  {\n    \"name\": \"load_hourly_jump_reasonable\",\n    \"description\": \"Hour-to-hour load change should not exceed 5000 MWh (flags implausible ramps).\",\n    \"column\": \"load_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.diff().abs() <= 5000) | (s.diff().isna())\"\n  },\n  {\n    \"name\": \"wind_onshore_hourly_jump_reasonable\",\n    \"description\": \"Hour-to-hour onshore wind change should not exceed 800 MWh.\",\n    \"column\": \"wind_onshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.diff().abs() <= 800) | (s.diff().isna())\"\n  },\n  {\n    \"name\": \"wind_offshore_hourly_jump_reasonable\",\n    \"description\": \"Hour-to-hour offshore wind change should not exceed 2000 MWh (higher volatility expected).\",\n    \"column\": \"wind_offshore_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.diff().abs() <= 2000) | (s.diff().isna())\"\n  },\n  {\n    \"name\": \"solar_hourly_jump_reasonable\",\n    \"description\": \"Hour-to-hour solar change should not exceed 3000 MWh (accounts for cloud cover and sunrise/sunset).\",\n    \"column\": \"solar_mwh\",\n    \"severity\": \"warning\",\n    \"expression\": \"(s.diff().abs() <= 3000) | (s.diff().isna())\"\n  }\n]\n```",
   "parse_error": null,
   "rules": [
     {
       "name": "price_non_negative",
       "description": "Day-ahead price must be non-negative (negative prices are valid in German market but should be >= -500 EUR/MWh as physical floor).",
       "column": "price_da_eur_mwh",
-      "severity": "warning",
+      "severity": "error",
       "expression": "s >= -500"
     },
     {
       "name": "price_reasonable_upper_bound",
-      "description": "Day-ahead price should not exceed 1000 EUR/MWh (extreme but physically possible spike threshold).",
+      "description": "Day-ahead price should not exceed 1000 EUR/MWh (extreme but physically possible spike limit).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
       "expression": "s <= 1000"
@@ -29,7 +29,7 @@
     },
     {
       "name": "load_within_realistic_bounds",
-      "description": "Load should remain within 30000-85000 MWh range for German bidding zone (based on historical norms).",
+      "description": "Load should stay within 30000-85000 MWh range for German bidding zone.",
       "column": "load_mwh",
       "severity": "warning",
       "expression": "(s >= 30000) & (s <= 85000)"
@@ -56,39 +56,39 @@
       "expression": "s >= 0"
     },
     {
-      "name": "solar_realistic_maximum",
-      "description": "Solar generation should not exceed 45000 MWh (physical capacity constraint for DE-LU zone).",
-      "column": "solar_mwh",
-      "severity": "warning",
-      "expression": "s <= 45000"
-    },
-    {
-      "name": "price_hourly_jump_moderate",
-      "description": "Hour-to-hour price changes should not exceed 200 EUR/MWh (flags extreme volatility).",
+      "name": "price_hourly_jump_reasonable",
+      "description": "Hour-to-hour price change should not exceed 200 EUR/MWh (flags extreme volatility).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
       "expression": "(s.diff().abs() <= 200) | (s.diff().isna())"
     },
     {
-      "name": "load_hourly_jump_moderate",
-      "description": "Hour-to-hour load changes should not exceed 5000 MWh (flags implausible ramps).",
+      "name": "load_hourly_jump_reasonable",
+      "description": "Hour-to-hour load change should not exceed 5000 MWh (flags implausible ramps).",
       "column": "load_mwh",
       "severity": "warning",
       "expression": "(s.diff().abs() <= 5000) | (s.diff().isna())"
     },
     {
-      "name": "wind_onshore_hourly_jump_moderate",
-      "description": "Hour-to-hour onshore wind changes should not exceed 800 MWh (flags implausible ramps).",
+      "name": "wind_onshore_hourly_jump_reasonable",
+      "description": "Hour-to-hour onshore wind change should not exceed 800 MWh.",
       "column": "wind_onshore_mwh",
       "severity": "warning",
       "expression": "(s.diff().abs() <= 800) | (s.diff().isna())"
     },
     {
-      "name": "wind_offshore_hourly_jump_moderate",
-      "description": "Hour-to-hour offshore wind changes should not exceed 2000 MWh (higher volatility expected).",
+      "name": "wind_offshore_hourly_jump_reasonable",
+      "description": "Hour-to-hour offshore wind change should not exceed 2000 MWh (higher volatility expected).",
       "column": "wind_offshore_mwh",
       "severity": "warning",
       "expression": "(s.diff().abs() <= 2000) | (s.diff().isna())"
+    },
+    {
+      "name": "solar_hourly_jump_reasonable",
+      "description": "Hour-to-hour solar change should not exceed 3000 MWh (accounts for cloud cover and sunrise/sunset).",
+      "column": "solar_mwh",
+      "severity": "warning",
+      "expression": "(s.diff().abs() <= 3000) | (s.diff().isna())"
     }
   ],
   "results": [
@@ -96,7 +96,7 @@
       "name": "price_non_negative",
       "description": "Day-ahead price must be non-negative (negative prices are valid in German market but should be >= -500 EUR/MWh as physical floor).",
       "column": "price_da_eur_mwh",
-      "severity": "warning",
+      "severity": "error",
       "expression": "s >= -500",
       "status": "pass",
       "violations": 0,
@@ -105,7 +105,7 @@
     },
     {
       "name": "price_reasonable_upper_bound",
-      "description": "Day-ahead price should not exceed 1000 EUR/MWh (extreme but physically possible spike threshold).",
+      "description": "Day-ahead price should not exceed 1000 EUR/MWh (extreme but physically possible spike limit).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
       "expression": "s <= 1000",
@@ -127,7 +127,7 @@
     },
     {
       "name": "load_within_realistic_bounds",
-      "description": "Load should remain within 30000-85000 MWh range for German bidding zone (based on historical norms).",
+      "description": "Load should stay within 30000-85000 MWh range for German bidding zone.",
       "column": "load_mwh",
       "severity": "warning",
       "expression": "(s >= 30000) & (s <= 85000)",
@@ -170,19 +170,8 @@
       "error": null
     },
     {
-      "name": "solar_realistic_maximum",
-      "description": "Solar generation should not exceed 45000 MWh (physical capacity constraint for DE-LU zone).",
-      "column": "solar_mwh",
-      "severity": "warning",
-      "expression": "s <= 45000",
-      "status": "pass",
-      "violations": 0,
-      "fraction": 0.0,
-      "error": null
-    },
-    {
-      "name": "price_hourly_jump_moderate",
-      "description": "Hour-to-hour price changes should not exceed 200 EUR/MWh (flags extreme volatility).",
+      "name": "price_hourly_jump_reasonable",
+      "description": "Hour-to-hour price change should not exceed 200 EUR/MWh (flags extreme volatility).",
       "column": "price_da_eur_mwh",
       "severity": "warning",
       "expression": "(s.diff().abs() <= 200) | (s.diff().isna())",
@@ -192,8 +181,8 @@
       "error": null
     },
     {
-      "name": "load_hourly_jump_moderate",
-      "description": "Hour-to-hour load changes should not exceed 5000 MWh (flags implausible ramps).",
+      "name": "load_hourly_jump_reasonable",
+      "description": "Hour-to-hour load change should not exceed 5000 MWh (flags implausible ramps).",
       "column": "load_mwh",
       "severity": "warning",
       "expression": "(s.diff().abs() <= 5000) | (s.diff().isna())",
@@ -203,8 +192,8 @@
       "error": null
     },
     {
-      "name": "wind_onshore_hourly_jump_moderate",
-      "description": "Hour-to-hour onshore wind changes should not exceed 800 MWh (flags implausible ramps).",
+      "name": "wind_onshore_hourly_jump_reasonable",
+      "description": "Hour-to-hour onshore wind change should not exceed 800 MWh.",
       "column": "wind_onshore_mwh",
       "severity": "warning",
       "expression": "(s.diff().abs() <= 800) | (s.diff().isna())",
@@ -214,8 +203,8 @@
       "error": null
     },
     {
-      "name": "wind_offshore_hourly_jump_moderate",
-      "description": "Hour-to-hour offshore wind changes should not exceed 2000 MWh (higher volatility expected).",
+      "name": "wind_offshore_hourly_jump_reasonable",
+      "description": "Hour-to-hour offshore wind change should not exceed 2000 MWh (higher volatility expected).",
       "column": "wind_offshore_mwh",
       "severity": "warning",
       "expression": "(s.diff().abs() <= 2000) | (s.diff().isna())",
@@ -223,18 +212,29 @@
       "violations": 0,
       "fraction": 0.0,
       "error": null
+    },
+    {
+      "name": "solar_hourly_jump_reasonable",
+      "description": "Hour-to-hour solar change should not exceed 3000 MWh (accounts for cloud cover and sunrise/sunset).",
+      "column": "solar_mwh",
+      "severity": "warning",
+      "expression": "(s.diff().abs() <= 3000) | (s.diff().isna())",
+      "status": "fail",
+      "violations": 13,
+      "fraction": 0.0181,
+      "error": null
     }
   ],
   "summary": {
     "total_rules": 12,
-    "pass": 11,
-    "fail": 1,
+    "pass": 10,
+    "fail": 2,
     "error": 0,
     "skipped": 0,
     "suspect": 0
   },
   "usage": {
     "input_tokens": 1085,
-    "output_tokens": 1043
+    "output_tokens": 1050
   }
 }

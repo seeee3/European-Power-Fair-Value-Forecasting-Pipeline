@@ -290,15 +290,20 @@ def build_shift_plan(
             f"Shift flexible load out of local hours {red.hours_local} "
             f"into local hours {green.hours_local}."
         ),
+        # Written for the person who has to act on them, not for the model that
+        # produced them. Each one names the situation and the action to take.
         "override_conditions": [
-            "Renewable share data stale or >6h delayed — carbon estimate unreliable, hold schedule",
-            "Forecast MAE over trailing 30 days exceeds 2x hold-out MAE "
-            f"({2 * model_mae:.0f} EUR/MWh) — suspend automated shifting",
-            "Price/carbon correlation over trailing 30 days falls below 0.25 — "
-            "premise broken, revert to fixed schedule",
-            "Shifting would breach a process constraint (chilled-water storage limit, "
-            "desalination minimum output, EV departure deadline) — constraint always wins",
-            "Grid operator issues a demand-response instruction — operator signal overrides model",
+            "Wind and solar readings are more than six hours out of date. The estimate of "
+            "which hours are cleaner cannot be trusted, so keep the current schedule.",
+            f"Forecasts have been off by more than {2 * model_mae:.0f} euros per MWh over the past "
+            "month, roughly double the expected error. Stop shifting automatically until it recovers.",
+            "Cheap hours have stopped being cleaner hours over the past month. The reasoning behind "
+            "the schedule no longer holds, so revert to a fixed one.",
+            "Following the schedule would breach an operating limit, such as chilled-water storage "
+            "capacity, a minimum desalination output, or a vehicle that must be charged by a set "
+            "time. The operating limit always wins.",
+            "The grid operator has issued its own demand instruction. That always overrides this "
+            "recommendation.",
         ],
     }
     return plan

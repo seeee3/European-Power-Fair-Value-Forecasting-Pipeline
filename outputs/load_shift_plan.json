@@ -54,11 +54,11 @@
   "confidence": "high",
   "recommendation": "Shift flexible load out of local hours [7, 8, 9, 15, 16, 17, 18, 19, 20] into local hours [0, 1, 2, 3, 4, 5, 12, 23].",
   "override_conditions": [
-    "Renewable share data stale or >6h delayed \u2014 carbon estimate unreliable, hold schedule",
-    "Forecast MAE over trailing 30 days exceeds 2x hold-out MAE (58 EUR/MWh) \u2014 suspend automated shifting",
-    "Price/carbon correlation over trailing 30 days falls below 0.25 \u2014 premise broken, revert to fixed schedule",
-    "Shifting would breach a process constraint (chilled-water storage limit, desalination minimum output, EV departure deadline) \u2014 constraint always wins",
-    "Grid operator issues a demand-response instruction \u2014 operator signal overrides model"
+    "Wind and solar readings are more than six hours out of date. The estimate of which hours are cleaner cannot be trusted, so keep the current schedule.",
+    "Forecasts have been off by more than 58 euros per MWh over the past month, roughly double the expected error. Stop shifting automatically until it recovers.",
+    "Cheap hours have stopped being cleaner hours over the past month. The reasoning behind the schedule no longer holds, so revert to a fixed one.",
+    "Following the schedule would breach an operating limit, such as chilled-water storage capacity, a minimum desalination output, or a vehicle that must be charged by a set time. The operating limit always wins.",
+    "The grid operator has issued its own demand instruction. That always overrides this recommendation."
   ],
   "illustrative_scale_up": {
     "shiftable_mwh_per_day": 200,
