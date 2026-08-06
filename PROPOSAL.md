@@ -55,7 +55,9 @@ Built on Germany, the most liquid public power market in the world, using four y
 
 For an operator with 200 MWh/day of genuinely shiftable load, the hold-out window implies roughly **4.6M EUR and 3,000 tCO₂ per year**. That figure is illustrative: it assumes flexibility is available every day at the observed spread, which real operational constraints would not sustain. The credible claim is the per-MWh figure; the annual number scales with how much flexibility an operator actually has.
 
-The strategic point is that this decarbonises and saves money through *scheduling* rather than capital expenditure. No new panels, no new storage, just existing equipment running at better times. And as solar penetration rises, intraday spreads widen, so the value grows rather than erodes.
+The strategic point is that the saving comes from *scheduling* rather than from building anything: no new generating plant and no grid-scale batteries, just existing equipment running at better times. And as solar penetration rises, intraday spreads widen, so the value grows rather than erodes.
+
+**Deployment is not free, though.** The model has to be integrated with the site's control system and the operator needs interval metering. Two prerequisites matter more than either. The flexibility must physically exist, since a district cooling plant with no thermal store cannot shift its load at any price. And the operator must be exposed to time-varying prices, because on a flat regulated tariff the saving is zero however accurate the forecast. That second condition is the same one that makes the UAE market structure a live question rather than a footnote.
 
 ### Where AI is used
 
