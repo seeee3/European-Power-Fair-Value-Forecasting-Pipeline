@@ -114,7 +114,8 @@ st.set_page_config(page_title="GridShift", layout="wide", initial_sidebar_state=
 
 st.markdown("""
 <style>
-  .block-container { padding-top: 2.2rem; max-width: 1200px; }
+  .block-container { padding: 1.2rem 2rem 2rem 2rem; max-width: 1500px; }
+  h1 { padding-top: 0; }
   #MainMenu, footer { visibility: hidden; }
   .gs-strip { display: flex; gap: 3px; margin: .2rem 0 .35rem 0; }
   .gs-cell { flex: 1; min-width: 0; text-align: center; padding: 13px 0; border-radius: 3px;
