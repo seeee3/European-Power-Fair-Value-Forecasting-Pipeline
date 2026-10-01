@@ -134,6 +134,20 @@ st.markdown("""
   .gs-rule .n { font-weight: 620; color: #101821; }
   .gs-rule .d { color: #5C6875; font-size: 13.5px; margin-top: .15rem; }
 
+  .gs-strip { display: flex; gap: 3px; margin: .4rem 0 .5rem 0; }
+  .gs-cell { flex: 1; min-width: 0; text-align: center; padding: 14px 0; border-radius: 3px;
+             font-size: 12px; font-weight: 620; font-variant-numeric: tabular-nums; }
+  .gs-cell.run   { background: #0F8C80; color: #fff; }
+  .gs-cell.avoid { background: #C9531F; color: #fff; }
+  .gs-cell.mid   { background: #EAE3CC; color: #5C6875; }
+  .gs-legend { font-size: 13px; color: #5C6875; }
+  .gs-legend b.run { color: #0F8C80; } .gs-legend b.avoid { color: #C9531F; }
+  .gs-step { border: 1px solid #DDE3E9; border-radius: 4px; padding: 12px 16px; background: #F5F7F9;
+             font-size: 14px; color: #33404C; line-height: 1.45; height: 100%; }
+  .gs-step .num { font-weight: 700; color: #0F8C80; margin-right: 6px; }
+  .gs-plan { font-size: 15.5px; line-height: 1.6; color: #101821; }
+  .gs-plan .when { font-weight: 660; font-variant-numeric: tabular-nums; }
+
   section[data-testid="stSidebar"] { background: #F5F7F9; border-right: 1px solid #DDE3E9; }
   section[data-testid="stSidebar"] .gs-side-h { font-size: 19px; font-weight: 660; color: #101821; }
 </style>
@@ -193,8 +207,26 @@ with st.sidebar:
                 unsafe_allow_html=True)
 
 
+# ── Intro: what this is and how to use it, before anything else ───────────────
+st.markdown('<div class="gs-eyebrow">GridShift · working prototype</div>', unsafe_allow_html=True)
+st.markdown('<div class="gs-h">Know which hours to run your equipment in</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="gs-sub">Large electricity users such as cooling plants, desalination plants, EV fleets '
+    'and data centres can often run their equipment at a different time of day. Electricity costs about '
+    'twice as much in the evening as it does at night. GridShift forecasts tomorrow\'s hourly price and '
+    'tells you which hours to use. Shown here on German market data for October to December 2025.</div>',
+    unsafe_allow_html=True)
+s1, s2, s3 = st.columns(3)
+for col, n, text in [
+    (s1, 1, "See the <b>green</b> hours to run in and the <b>red</b> hours to avoid."),
+    (s2, 2, "Tell it <b>what you run</b> and how much electricity use you can move."),
+    (s3, 3, "Get <b>your plan</b> and an estimate of what you would save."),
+]:
+    col.markdown(f'<div class="gs-step"><span class="num">{n}</span>{text}</div>', unsafe_allow_html=True)
+st.write("")
+
 tab_rec, tab_forecast, tab_acc, tab_data, tab_method = st.tabs(
-    ["Recommendation", "Price forecast", "How accurate is it", "Data quality", "How it works"]
+    ["Your schedule", "The forecast", "Can I trust it?", "Data checks", "How it works"]
 )
 
 
@@ -205,15 +237,24 @@ with tab_rec:
     if not plan:
         st.warning("No recommendation yet. Run `python run_pipeline.py` first.")
     else:
-        st.markdown('<div class="gs-eyebrow">The answer</div>', unsafe_allow_html=True)
-        st.markdown('<div class="gs-h">When to run flexible equipment</div>', unsafe_allow_html=True)
+        green_hours = green.get("local_hours", [])
+        red_hours = red.get("local_hours", [])
+
+        st.markdown('<div class="gs-eyebrow">Step 1 · The hours</div>', unsafe_allow_html=True)
+        st.markdown('<div class="gs-h" style="font-size:22px">Your day at a glance</div>',
+                    unsafe_allow_html=True)
         st.markdown(
-            '<div class="gs-sub">Move whatever load you can (chillers, desalination trains, '
-            'EV charging, batch computing) out of the expensive hours and into the cheap ones. '
-            'The times below are local clock hours, and they hold for most days in the period '
-            'analysed rather than for one specific day.</div>',
-            unsafe_allow_html=True,
-        )
+            '<div class="gs-sub">Each box is one hour of the day, in local clock time. Use electricity '
+            'in the green hours and cut back in the red ones. The pattern held on most days in the '
+            'period analysed.</div>', unsafe_allow_html=True)
+        cells = "".join(
+            f'<div class="gs-cell {"run" if h in green_hours else "avoid" if h in red_hours else "mid"}">'
+            f'{h:02d}</div>' for h in range(24))
+        st.markdown(f'<div class="gs-strip">{cells}</div>'
+                    '<div class="gs-legend"><b class="run">Green: run</b> &nbsp;·&nbsp; '
+                    'Beige: normal &nbsp;·&nbsp; <b class="avoid">Red: avoid</b></div>',
+                    unsafe_allow_html=True)
+        st.write("")
 
         c1, c2 = st.columns(2)
         with c1:
@@ -235,32 +276,72 @@ with tab_rec:
                 f'<b>{red.get("mean_renewable_share", 0):.0%}</b> comes from wind and solar.</div>'
                 f'</div>', unsafe_allow_html=True)
 
-        st.write("")
-        st.markdown('<div class="gs-eyebrow">What that is worth</div>', unsafe_allow_html=True)
-
+        # ── Steps 2 and 3: plan my site ─────────────────────────────────────────
         saving = impact.get("cost_saving_eur", 0)
         co2 = impact.get("co2_avoided_t", 0)
-        d1, d2, d3 = st.columns(3)
-        with d1:
+        sites = {
+            "District cooling": (
+                "Make chilled water and store it in the tank.",
+                "Draw on the stored chilled water instead of running the chillers.",
+                "You can only move as much cooling as your tank holds.", 50),
+            "Desalination": (
+                "Run the reverse-osmosis trains at full output and fill the reservoir.",
+                "Turn the trains down towards minimum and supply from the reservoir.",
+                "Never go below the plant's minimum safe output.", 40),
+            "EV fleet": (
+                "Charge the vehicles.",
+                "Pause charging. Vehicles stay plugged in.",
+                "Every vehicle must still be charged by its departure time.", 20),
+            "Data centre": (
+                "Run batch jobs, model training and backups.",
+                "Hold back deferrable jobs. Live services run as normal.",
+                "Only work that can wait should move. Customer-facing services never wait.", 30),
+        }
+
+        st.write("")
+        st.markdown('<div class="gs-eyebrow">Steps 2 and 3 · Plan my site</div>', unsafe_allow_html=True)
+        st.markdown('<div class="gs-h" style="font-size:22px">What should my site do?</div>',
+                    unsafe_allow_html=True)
+        p1, p2 = st.columns([1, 1.25], gap="large")
+        with p1:
+            site = st.radio("What do you run?", list(sites), horizontal=True)
+            run_text, avoid_text, limit_text, default_mwh = sites[site]
+            mwh = st.slider(
+                "How much electricity use can you move each day? (MWh)", 5, 300, default_mwh, 5,
+                key=f"mwh_{site}",
+                help="A megawatt-hour (MWh) is 1,000 kWh. Count only what you can really move, "
+                     "given your storage, minimum output or deadlines.")
             st.markdown(
-                f'<div class="gs-card"><div class="gs-label">Money saved</div>'
-                f'<div class="gs-big teal">&euro;{saving:.0f}</div>'
-                f'<div class="gs-note">for every megawatt-hour you move out of an expensive hour '
-                f'into a cheap one.</div></div>', unsafe_allow_html=True)
-        with d2:
+                f'<div class="gs-plan" style="margin-top:.6rem">'
+                f'<div><span class="when" style="color:#0F8C80">{clock(green_hours)}</span><br>{run_text}</div>'
+                f'<div style="margin-top:.6rem"><span class="when" style="color:#C9531F">{clock(red_hours)}</span>'
+                f'<br>{avoid_text}</div>'
+                f'<div style="margin-top:.6rem"><span class="when">All other hours</span><br>Run as normal.</div>'
+                f'</div><div class="gs-tiny" style="margin-top:.7rem">&#9888; {limit_text} '
+                f'Your operating limits always come first.</div>', unsafe_allow_html=True)
+        with p2:
+            q1, q2 = st.columns(2)
+            with q1:
+                st.markdown(
+                    f'<div class="gs-card good"><div class="gs-label">Saved per day</div>'
+                    f'<div class="gs-big teal">&euro;{mwh * saving:,.0f}</div>'
+                    f'<div class="gs-note">&euro;{saving:.0f} for every MWh moved from a red hour '
+                    f'to a green one.</div></div>', unsafe_allow_html=True)
+            with q2:
+                st.markdown(
+                    f'<div class="gs-card good"><div class="gs-label">Saved per year</div>'
+                    f'<div class="gs-big teal">&euro;{mwh * saving * 365 / 1e6:,.2f}m</div>'
+                    f'<div class="gs-note">if you move this much every day.</div></div>',
+                    unsafe_allow_html=True)
+            st.write("")
             st.markdown(
-                f'<div class="gs-card"><div class="gs-label">Carbon avoided</div>'
-                f'<div class="gs-big">{co2:.3f} t</div>'
-                f'<div class="gs-note">per megawatt-hour moved. This is small, and honestly so: '
-                f'see the note below.</div></div>', unsafe_allow_html=True)
-        with d3:
-            scaled = plan.get("illustrative_scale_up") or {}
-            st.markdown(
-                f'<div class="gs-card"><div class="gs-label">A plant moving 200 MWh a day</div>'
-                f'<div class="gs-big teal">&euro;{scaled.get("annual_cost_saving_eur", 0)/1e6:.1f}m</div>'
-                f'<div class="gs-note">a year, plus about '
-                f'{scaled.get("annual_co2_avoided_t", 0):,} tonnes of CO&#8322;. Illustrative: it assumes '
-                f'that much load really can move, every day.</div></div>', unsafe_allow_html=True)
+                f'<div class="gs-card"><div class="gs-label">Carbon avoided per year</div>'
+                f'<div class="gs-big">{mwh * co2 * 365:,.0f} t CO&#8322;</div>'
+                f'<div class="gs-note">{co2:.3f} t per MWh moved in this period, because the green hours '
+                f'had more wind and solar. Estimated from renewable output, not measured.</div></div>',
+                unsafe_allow_html=True)
+            st.markdown('<div class="gs-tiny">Estimates use October to December 2025 prices. Real savings '
+                        'depend on how much you can actually move each day.</div>', unsafe_allow_html=True)
 
         st.write("")
         st.markdown('<div class="gs-eyebrow">Is the reasoning sound?</div>', unsafe_allow_html=True)
@@ -299,11 +380,12 @@ with tab_rec:
 
         st.write("")
         st.info(
-            "**Why the carbon saving is modest.** Most of the gap between clean and dirty hours is "
-            "between *days* (windy days versus still ones), not between hours of the same day. A plant "
-            "can move a run from 7pm to 3am, but it cannot move June's demand into April. Only the "
-            "within-day part is actually available, and that part is small. This is a cost-saving and "
-            "peak-shaving tool first, with carbon as a genuine but secondary benefit."
+            "**How much of the carbon gap can scheduling reach?** Cheap hours are cleaner for two "
+            "reasons: some *days* are windier than others, and within each day some *hours* have more "
+            "wind and sun. A plant can move a run from 7pm to 3am, but it cannot move June's demand into "
+            "April, so only the within-day part counts. Over 2022 to 2025 that part is about 0.16 t CO₂ "
+            "per MWh, nearly as large as the between-day part (0.17). Cost leads, because it comes "
+            "straight from a market price; carbon is a real co-benefit, estimated rather than measured."
         )
 
         st.write("")
@@ -493,13 +575,12 @@ with tab_data:
                         unsafe_allow_html=True)
 
         st.write("")
-        st.warning(
-            "**The data source is not reliable, and that matters.** Asking the German grid operator's "
-            "portal for the same four years twice returned different answers: one attempt lost electricity "
-            "demand entirely, another lost onshore wind, a third returned an error for offshore wind. "
-            "The dataset used here was assembled by taking the most complete version of each measurement "
-            "and then frozen. An earlier version of this analysis reported a much stronger link between "
-            "price and carbon, and that turned out to be an artefact of one of these gaps."
+        st.info(
+            "**Two silent bugs, found and fixed.** In an earlier version, three of the five data feeds "
+            "were mislabelled in my own code: biomass was read in as onshore wind, and solar was never "
+            "downloaded at all. Nothing errored and every check passed. Each series is now verified "
+            "against what that technology physically does (solar is zero at night, wind has no daily "
+            "cycle), and the pipeline refuses to run if any series is missing or more than 5% empty."
         )
 
     st.write("")
@@ -611,8 +692,8 @@ with tab_method:
         st.markdown('<div class="gs-h" style="font-size:19px">Honest limitations</div>',
                     unsafe_allow_html=True)
         for lim in [
-            "The carbon benefit is modest, because most of the clean-versus-dirty gap sits between days "
-            "rather than within one.",
+            "Scheduling can only reach the within-day part of the clean-versus-dirty gap, not the "
+            "difference between windy and calm days.",
             "Carbon intensity is estimated from how much wind and solar were running, not measured at "
             "the power station.",
             "Built and tested on Germany. The UAE has no hourly wholesale price to forecast, so a "
