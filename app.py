@@ -77,6 +77,47 @@ def link_strength(r: float | None) -> tuple[str, str]:
     return "Too weak to rely on", "bad"
 
 
+# ── Replay: score the model's own daily schedule against real prices ─────────
+@st.cache_data
+def load_replay() -> pd.DataFrame | None:
+    """Hold-out forecasts joined to what actually happened, in local time, full days only."""
+    fc, raw = OUTPUTS / "submission.csv", ROOT / "data" / "raw" / "de_power_market.parquet"
+    if not (fc.exists() and raw.exists()):
+        return None
+    f = pd.read_csv(fc)
+    f["id"] = pd.to_datetime(f["id"], utc=True)
+    d = f.set_index("id").join(pd.read_parquet(raw), how="inner").tz_convert("Europe/Berlin")
+    d["share"] = ((d["wind_onshore_mwh"] + d["wind_offshore_mwh"] + d["solar_mwh"])
+                  / d["load_mwh"]).clip(0, 1)
+    d["date"] = d.index.date
+    sizes = d.groupby("date").size()
+    return d[d["date"].isin(sizes[sizes >= 23].index)]  # drop the partial day at the edge
+
+
+def score_day(g: pd.DataFrame, n: int) -> dict:
+    """
+    Plan the day from the forecast alone (cheapest n hours = run, priciest n = avoid),
+    then score that plan at the prices that actually cleared.
+    """
+    run, avoid = g["y_pred"].nsmallest(n).index, g["y_pred"].nlargest(n).index
+    actual = g["price_da_eur_mwh"]
+    return {
+        "run": run, "avoid": avoid,
+        "planned": g["y_pred"][avoid].mean() - g["y_pred"][run].mean(),
+        "got": actual[avoid].mean() - actual[run].mean(),
+        "best": actual.nlargest(n).mean() - actual.nsmallest(n).mean(),
+        "share_gap": g["share"][run].mean() - g["share"][avoid].mean(),
+    }
+
+
+@st.cache_data
+def replay_summary(n: int) -> dict:
+    d = load_replay()
+    s = pd.DataFrame([score_day(g, n) for _, g in d.groupby("date")])
+    return {"days": len(s), "got": s["got"].mean(), "captured": s["got"].sum() / s["best"].sum(),
+            "loss_days": int((s["got"] < 0).sum())}
+
+
 # ── Page setup ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="GridShift", layout="wide", initial_sidebar_state="expanded")
 
@@ -214,7 +255,8 @@ st.markdown(
     '<div class="gs-sub">Large electricity users such as cooling plants, desalination plants, EV fleets '
     'and data centres can often run their equipment at a different time of day. Electricity costs about '
     'twice as much in the evening as it does at night. GridShift forecasts tomorrow\'s hourly price and '
-    'tells you which hours to use. Shown here on German market data for October to December 2025.</div>',
+    'tells you which hours to use. Shown here on German market data for October to December 2025; '
+    'the <b>Replay any day</b> tab tests it on a day of your choice.</div>',
     unsafe_allow_html=True)
 s1, s2, s3 = st.columns(3)
 for col, n, text in [
@@ -225,8 +267,8 @@ for col, n, text in [
     col.markdown(f'<div class="gs-step"><span class="num">{n}</span>{text}</div>', unsafe_allow_html=True)
 st.write("")
 
-tab_rec, tab_forecast, tab_acc, tab_data, tab_method = st.tabs(
-    ["Your schedule", "The forecast", "Can I trust it?", "Data checks", "How it works"]
+tab_rec, tab_replay, tab_forecast, tab_acc, tab_data, tab_method = st.tabs(
+    ["Your schedule", "Replay any day", "The forecast", "Can I trust it?", "Data checks", "How it works"]
 )
 
 
@@ -395,6 +437,116 @@ with tab_rec:
         for c in plan.get("override_conditions", []):
             st.markdown(f'<div class="gs-rule"><span class="gs-dot bad"></span>{c}</div>',
                         unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REPLAY ANY DAY
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_replay:
+    st.markdown('<div class="gs-eyebrow">Replay · scored against what really happened</div>',
+                unsafe_allow_html=True)
+    st.markdown('<div class="gs-h">How would GridShift have done on a day you choose?</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        '<div class="gs-sub">Pick any day from October to December 2025. The model never saw these days '
+        'while it was being built. GridShift plans the day from its forecast alone, then the plan is '
+        'checked against the prices that actually cleared that day.</div>', unsafe_allow_html=True)
+
+    rp = load_replay()
+    if rp is None or not mae:
+        st.warning("No forecast or data yet. Run `python run_pipeline.py` first.")
+    else:
+        import altair as alt
+
+        days = sorted(rp["date"].unique())
+        k1, k2 = st.columns(2)
+        with k1:
+            demo = pd.Timestamp("2025-11-25").date()  # widest spread in the window: a clear first example
+            day = st.date_input("Day", value=demo if demo in days else days[len(days) // 2], min_value=days[0], max_value=days[-1],
+                                format="DD/MM/YYYY")
+        with k2:
+            n = st.slider("Hours of storage (how many hours you can shift)", 1, 8, 4,
+                          help="A plant with a 4-hour chilled-water tank can move 4 hours of running "
+                               "out of the expensive hours and into the cheap ones.")
+
+        g = rp[rp["date"] == day]
+        res = score_day(g, n)
+        run_h = sorted(res["run"].hour)
+        avoid_h = sorted(res["avoid"].hour)
+
+        if res["planned"] < 1.5 * mae:
+            st.warning(
+                f"**Low confidence for this day.** The forecast sees only €{res['planned']:.0f} between "
+                f"the cheap and expensive hours, less than 1.5 times its typical error (€{1.5 * mae:.0f}). "
+                f"GridShift would advise keeping your normal schedule. The plan below is shown anyway.")
+        else:
+            st.success(
+                f"**High confidence for this day.** The forecast expects a €{res['planned']:.0f} gap "
+                f"between the cheap and expensive hours, well above its typical error.")
+
+        cells = "".join(
+            f'<div class="gs-cell {"run" if t in res["run"] else "avoid" if t in res["avoid"] else "mid"}">'
+            f'{t.hour:02d}</div>' for t in g.index)
+        st.markdown(
+            f'<div class="gs-label" style="margin-top:.4rem">The plan for '
+            f'{pd.Timestamp(day):%A %d %B %Y}, made from the forecast</div>'
+            f'<div class="gs-strip">{cells}</div>'
+            f'<div class="gs-legend"><b class="run">Run: {clock(run_h)}</b> &nbsp;·&nbsp; '
+            f'<b class="avoid">Avoid: {clock(avoid_h)}</b></div>', unsafe_allow_html=True)
+        st.write("")
+
+        captured = res["got"] / res["best"] if res["best"] > 0 else float("nan")
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.markdown(
+                f'<div class="gs-card {"good" if res["got"] >= 0 else "bad"}">'
+                f'<div class="gs-label">Saved, at real prices</div>'
+                f'<div class="gs-big {"teal" if res["got"] >= 0 else "ember"}">{eur(res["got"])}</div>'
+                f'<div class="gs-note">per MWh moved from the avoid hours to the run hours.</div></div>',
+                unsafe_allow_html=True)
+        with m2:
+            st.markdown(
+                f'<div class="gs-card"><div class="gs-label">Best possible</div>'
+                f'<div class="gs-big">{eur(res["best"])}</div>'
+                f'<div class="gs-note">per MWh, if you had known the real prices in advance.</div></div>',
+                unsafe_allow_html=True)
+        with m3:
+            st.markdown(
+                f'<div class="gs-card"><div class="gs-label">Share captured</div>'
+                f'<div class="gs-big teal">{captured:.0%}</div>'
+                f'<div class="gs-note">of the best possible saving. Run hours had '
+                f'{res["share_gap"] * 100:+.0f} percentage points more wind and solar.</div></div>',
+                unsafe_allow_html=True)
+
+        st.write("")
+        c = g.tz_localize(None).reset_index()  # local clock time, so the chart shows local hours
+        long = c.melt(id_vars="id", value_vars=["y_pred", "price_da_eur_mwh"],
+                      var_name="series", value_name="price")
+        long["series"] = long["series"].map({"y_pred": "Forecast", "price_da_eur_mwh": "Actual price"})
+        starts = list(res["run"].tz_localize(None)) + list(res["avoid"].tz_localize(None))
+        band = pd.DataFrame({"start": starts, "band": ["Run"] * n + ["Avoid"] * n})
+        band["end"] = band["start"] + pd.Timedelta(hours=1)
+        rects = alt.Chart(band).mark_rect(opacity=0.18).encode(
+            x="start:T", x2="end:T",
+            color=alt.Color("band:N", scale=alt.Scale(domain=["Run", "Avoid"], range=["#0F8C80", "#C9531F"]),
+                            legend=alt.Legend(title=None, orient="top")))
+        lines = alt.Chart(long).mark_line(point=True).encode(
+            x=alt.X("id:T", title=None, axis=alt.Axis(format="%H:%M")),
+            y=alt.Y("price:Q", title="€ per MWh"),
+            strokeDash=alt.StrokeDash("series:N", legend=alt.Legend(title=None, orient="top")),
+            color=alt.value("#101821"),
+            tooltip=[alt.Tooltip("id:T", title="Hour", format="%H:%M"), "series:N",
+                     alt.Tooltip("price:Q", title="€/MWh", format=".0f")])
+        st.markdown('<div class="gs-h" style="font-size:19px">Forecast against what actually happened</div>',
+                    unsafe_allow_html=True)
+        st.altair_chart((rects + lines).properties(height=320), use_container_width=True)
+
+        summ = replay_summary(n)
+        st.info(
+            f"**Across all {summ['days']} days, with {n} hours of storage:** following the forecast saved "
+            f"€{summ['got']:.0f} per MWh moved on average, captured {summ['captured']:.0%} of the best "
+            f"possible saving, and lost money on {summ['loss_days']} "
+            f"day{'s' if summ['loss_days'] != 1 else ''}.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
