@@ -23,10 +23,40 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 RAW_PARQUET = cfg.DATA_RAW / "de_power_market.parquet"
+
+# Every series the pipeline models on, and the share of hours each is allowed to
+# be missing before the run is refused. Both fetchers have silently produced
+# empty or wrong-technology columns — SMARD via wrong filter IDs, ENTSO-E via
+# over-long request windows that 400 and were caught into an empty Series — and
+# in both cases the pipeline modelled on the result without complaint. The
+# check lives here rather than in either client so it also covers the cache.
+REQUIRED_SERIES = (
+    "price_da_eur_mwh",
+    "load_mwh",
+    "wind_onshore_mwh",
+    "wind_offshore_mwh",
+    "solar_mwh",
+)
+MAX_MISSING_FRACTION = 0.05
 QA_REPORT = cfg.OUTPUTS / "qa_report.json"
 LLM_QA_LOG = cfg.OUTPUTS / "llm_qa_log.json"
 SUBMISSION_CSV = cfg.OUTPUTS / "submission.csv"
 DELIVERY_VIEWS_CSV = cfg.OUTPUTS / "delivery_views.csv"
+
+
+def _assert_coverage(df: pd.DataFrame) -> pd.DataFrame:
+    """Refuse to model on a dataset with a missing or mostly-empty series."""
+    incomplete = {
+        col: (round(float(df[col].isna().mean()), 4) if col in df.columns else "absent")
+        for col in REQUIRED_SERIES
+        if col not in df.columns or df[col].isna().mean() > MAX_MISSING_FRACTION
+    }
+    if incomplete:
+        raise RuntimeError(
+            f"Ingested data is incomplete — missing fraction by series: {incomplete}. "
+            "Check the source filter IDs / request windows before modelling on this."
+        )
+    return df
 
 
 class Pipeline:
@@ -40,7 +70,7 @@ class Pipeline:
 
         if RAW_PARQUET.exists() and not self.config.force_refetch:
             console.print(f"  Loading cached data from {RAW_PARQUET}")
-            return pd.read_parquet(RAW_PARQUET)
+            return _assert_coverage(pd.read_parquet(RAW_PARQUET))
 
         if RAW_PARQUET.exists() and self.config.force_refetch:
             console.print("  [yellow]force_refetch=True — ignoring cache, re-fetching from source[/yellow]")
@@ -59,6 +89,7 @@ class Pipeline:
             from gridshift.ingestion.smard import fetch_dataset as smard_fetch
             df = smard_fetch(self.config.start_date, self.config.end_date)
 
+        _assert_coverage(df)
         df.to_parquet(RAW_PARQUET)
         console.print(f"  Saved {len(df):,} rows → {RAW_PARQUET}")
         return df
@@ -287,8 +318,9 @@ class Pipeline:
         console.print(f"    [red]Red hours[/red]   (local): {red['local_hours']}  "
                       f"@ {red['mean_price_eur_mwh']:.1f} EUR/MWh, "
                       f"{red['mean_renewable_share']:.1%} renewable")
+        co2 = impact["co2_avoided_t"]
         console.print(f"    Per MWh shifted: save {impact['cost_saving_eur']:.1f} EUR, "
-                      f"avoid {impact['co2_avoided_t']:.3f} tCO2")
+                      f"avoid {'unavailable' if co2 is None else format(co2, '.3f')} tCO2")
         console.print(f"    Confidence: [bold]{plan['confidence'].upper()}[/bold] "
                       f"(forecast MAE {plan['forecast_mae_eur_mwh']:.1f} EUR/MWh)")
 

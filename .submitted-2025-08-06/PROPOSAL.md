@@ -12,18 +12,18 @@ GridShift forecasts the next day's hourly electricity price and issues a concret
 
 ### What I set out to prove, and what the data actually said
 
-My starting thesis was that price is a good proxy for *carbon intensity*, because in a merit-order market abundant wind and solar push fossil plants out of the stack and the price down. If true, a price forecast would double as a forecast of when the grid is clean.
+My starting thesis was stronger: that price is a good proxy for *carbon intensity*, because in a merit-order market abundant wind and solar push fossil plants out of the stack and the price down. If true, a price forecast would double as a forecast of when the grid is clean.
 
-**I tested it rather than assuming it, and it holds moderately.** Across four years of hourly German data the correlation between price and estimated carbon intensity is **r = 0.53**: real and positive, stronger in winter (0.63) than summer (0.49), and far from deterministic. What matters more than the headline is where the relationship lives, because load can only be moved within a day:
+**I tested it, and it only partly holds.** Across four years of hourly German data the correlation between price and estimated carbon intensity is **r = 0.40**: real and positive, but moderate. More importantly, decomposing it shows the relationship lives mostly *between* days rather than *within* them:
 
 | | Renewable share, cheap vs expensive | CO₂ gap | Can load actually be shifted here? |
 |---|---|---|---|
-| Between days (windy vs calm) | 57.6% vs 29.3% | 0.170 t/MWh | **No.** You cannot move June demand into April |
-| Within a day | 56.3% vs 29.6% | **0.160 t/MWh** | **Yes** |
+| Between days (windy vs calm) | 50.3% vs 27.4% | 0.138 t/MWh | **No.** You cannot move June demand into April |
+| Within a day | 39.2% vs 33.5% | **0.034 t/MWh** | **Yes** |
 
-**The conclusion:** GridShift saves roughly **81 EUR and 0.16 tCO₂ per MWh shifted**. I lead on cost rather than carbon, because the cost figure comes straight from a market price while the carbon figure is inferred from renewable share and scales with an assumed emissions factor. Peak shaving also has grid value beyond the operator's own bill. It is a scheduling tool with a real decarbonisation co-benefit, not a decarbonisation breakthrough.
+An earlier version of this analysis reported r = 0.86. That figure was an artifact of a gap in the source data: with wind onshore missing, the renewable share was dominated by solar, which is strongly diurnal and therefore strongly anti-correlated with price. Restoring the complete wind series cut the correlation by more than half. I am reporting the corrected figure because the first one would not have survived scrutiny.
 
-**A correction, and what it cost me.** The version I submitted reported a within-day figure of 0.034 tCO₂/MWh and concluded that carbon was a minor side effect. That was wrong, and the cause was in my own ingestion code: three of five data filter IDs pointed at the wrong series, so biomass was labelled as onshore wind and solar was never downloaded at all. Solar is the most diurnal renewable there is, so leaving it out gutted exactly the within-day signal I was measuring. The corrected figure is 4.7 times larger. I found it by checking the shape of each series against what that technology physically does, which is the check I should have run before modelling rather than after presenting.
+**The honest conclusion:** GridShift is primarily a **cost-optimisation and peak-shaving** tool with a **modest carbon co-benefit**, roughly **81 EUR and 0.034 tCO₂ saved per MWh shifted**. That is still a strong business case, and peak shaving has real grid value beyond the operator's own bill. It is not a decarbonisation silver bullet, and pitching it as one would be wrong.
 
 ### Target users and stakeholders
 
@@ -41,19 +41,19 @@ Ingest hourly prices, demand and renewable generation → run automated quality 
 
 ### Evidence from the working prototype
 
-Built on Germany, the most liquid public power market in the world, using four years of hourly data (34,727 usable hours, 2022–2025):
+Built on Germany, the most liquid public power market in the world, using four years of hourly data (34,728 usable hours, 2022–2025):
 
 | | Result |
 |---|---|
-| Forecast error (Oct–Dec 2025 hold-out, 2,208 h unseen) | **26.9 EUR/MWh MAE**, **45.7% better** than the seasonal-naive industry baseline (49.4) |
-| Validation | 12-fold walk-forward CV, MAE 24.5 ± 8.0, no temporal leakage |
-| Prediction interval | 80% nominal, 73.4% empirical coverage. Under-covered in a volatile quarter, and reported rather than hidden |
-| Recommendation (hold-out window) | Shift **into** 00:00–05:00 and 23:00; **out of** 07:00–09:00 and 15:00–20:00 |
-| Impact per MWh shifted | **58.6 EUR saved, 0.066 tCO₂ avoided** |
+| Forecast error (Oct–Dec 2025 hold-out, 2,208 h unseen) | **28.8 EUR/MWh MAE**, **41.8% better** than the seasonal-naive industry baseline (49.4) |
+| Validation | 12-fold walk-forward CV, MAE 23.9 ± 7.3, no temporal leakage |
+| Prediction interval | 80% nominal, 70.2% empirical coverage. Under-covered in a volatile quarter, and reported rather than hidden |
+| Recommendation (hold-out window) | Shift **into** 00:00–05:00, 12:00, 23:00; **out of** 07:00–09:00 and 15:00–20:00 |
+| Impact per MWh shifted | **63.6 EUR saved, 0.041 tCO₂ avoided** |
 
 ### Business value
 
-For an operator with 200 MWh/day of genuinely shiftable load, the hold-out window implies roughly **4.3M EUR and 4,800 tCO₂ per year**. That figure is illustrative: it assumes flexibility is available every day at the observed spread, which real operational constraints would not sustain. The credible claim is the per-MWh figure; the annual number scales with how much flexibility an operator actually has.
+For an operator with 200 MWh/day of genuinely shiftable load, the hold-out window implies roughly **4.6M EUR and 3,000 tCO₂ per year**. That figure is illustrative: it assumes flexibility is available every day at the observed spread, which real operational constraints would not sustain. The credible claim is the per-MWh figure; the annual number scales with how much flexibility an operator actually has.
 
 The strategic point is that the saving comes from *scheduling* rather than from building anything: no new generating plant and no grid-scale batteries, just existing equipment running at better times. And as solar penetration rises, intraday spreads widen, so the value grows rather than erodes.
 
@@ -65,13 +65,13 @@ The strategic point is that the saving comes from *scheduling* rather than from 
 
 **Critically, the pipeline does not trust it.** The model produced rules containing a Python operator-precedence bug (`a <= b | c` parses as `a <= (b | c)`), which caused clean data to be reported as **720 quality failures when the true count was 6**. I found it, fixed the prompt, and added a guard that quarantines any rule flagging more than half the dataset as a malformed rule rather than a data finding. The guard is the load-bearing fix, because it does not depend on the model complying.
 
-**In building this submission**, I used Claude Code to research the framing, refine the idea, restructure the analysis, review my code and generate the diagrams and slides. I set the direction and made the judgement calls; the AI accelerated execution and challenged my assumptions, including catching that my headline correlation was a data artifact and, on a later review, that three of my data filter IDs pointed at the wrong series. Every number here comes from code that runs.
+**In building this submission**, I used Claude Code to research the framing, refine the idea, restructure the analysis, review my code and generate the diagrams and slides. I set the direction and made the judgement calls; the AI accelerated execution and challenged my assumptions, including catching that my own headline correlation was a data artifact. Every number here comes from code that runs.
 
 ### Risks, limitations and key considerations
 
-- **Only part of the carbon benefit is reachable.** Roughly half the price/carbon relationship lives between days rather than within them, and no amount of scheduling can exploit that half. Lead on cost; treat carbon as a genuine co-benefit rather than the headline.
-- **Carbon intensity is estimated, not metered.** It is derived from renewable share of demand, so the correlation demonstrates that price tracks *renewable share*, not measured emissions, and every CO₂ figure scales linearly with an assumed residual emissions factor of 0.60 t/MWh. Production use needs the grid operator's published factors.
-- **Ingestion failed silently, twice, and I did not catch it before submitting.** Wrong source filter IDs delivered real data for the wrong technology, and an API request window three times the permitted size returned empty columns that every quality check passed. The pipeline now refuses to model on any dataset where a required series is absent or more than 5% missing, and raw data is versioned rather than gitignored. The general lesson is that a data check which only validates ranges will not notice that a series is the wrong series; it has to test shape against what the process physically does.
+- **The carbon case is modest.** Only the within-day component of the price/carbon relationship is actionable, and it is small (0.034 tCO₂/MWh). Sell this on cost and peak shaving; treat carbon as a co-benefit.
+- **Carbon intensity is estimated, not metered.** It is derived from renewable share of demand, so the correlation demonstrates that price tracks *renewable share*, not measured emissions. Production use needs the grid operator's published emissions factors.
+- **The source data is unreliable.** Repeated fetches from SMARD returned different coverage each time. One run lost the load series entirely, another lost wind onshore, a third returned a 404. This is precisely how the r = 0.86 artifact arose. Any production version needs pinned, versioned datasets and coverage assertions before modelling, not after.
 - **The UAE has no wholesale hourly price to forecast.** This is the most important limitation, and it is structural rather than statistical. The model consumes a wholesale clearing price set by a marginal generator; EWEC operates as a **single buyer** procuring through long-term PPAs, DEWA is vertically integrated, and tariffs are regulated. Lifting this system to Abu Dhabi unchanged would fail because the input signal does not exist. The fix is a substitution, not a rebuild: in a single-buyer market the utility already knows its own dispatch stack, so it forecasts **system marginal cost and grid carbon intensity directly** instead of inferring them from price. The forecasting, within-day banding, premise check and override logic are all unchanged; only the input series changes. It also improves the commercial fit, moving the customer from a private site operator to a national utility.
 - **Physics bounds flexibility.** Storage limits, minimum output levels and delivery deadlines constrain what can move; the process constraint must always override the recommendation.
 - **Rebound risk.** If everyone shifts into the same cheap hours, those hours stop being cheap. At scale this needs coordination with the grid operator.

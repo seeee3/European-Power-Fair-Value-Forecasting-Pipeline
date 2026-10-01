@@ -24,13 +24,20 @@ REGION = "DE-LU"
 RESOLUTION = "quarterhour"
 
 # Filter IDs for DE-LU (Germany-Luxembourg bidding zone)
-# Source: SMARD Downloadcenter filter reference
+# Source: SMARD Downloadcenter filter reference.
+#
+# These IDs were wrong in the original version and the error was silent: the
+# series came back populated, just for the wrong technology. 4066 is biomass
+# (a near-constant ~4 GW), 4067 is onshore wind, and solar (4068) was never
+# fetched at all. 4065 and 4381 do not exist for DE-LU and returned nothing,
+# which was misread as the source being unreliable. Verified by matching each
+# series against the live endpoint before trusting the mapping again.
 FILTERS: dict[str, int] = {
     "price_da_eur_mwh": 4169,   # EPEX Spot Day-Ahead auction
-    "wind_onshore_mwh": 4066,   # Realised wind onshore generation
-    "wind_offshore_mwh": 4065,  # Realised wind offshore generation
-    "solar_mwh": 4067,          # Realised solar PV generation
-    "load_mwh": 4381,           # Realised grid load
+    "wind_onshore_mwh": 4067,   # Realised wind onshore generation
+    "wind_offshore_mwh": 1225,  # Realised wind offshore generation
+    "solar_mwh": 4068,          # Realised solar PV generation
+    "load_mwh": 410,            # Realised grid load (Netzlast)
 }
 
 _SESSION = requests.Session()
@@ -91,9 +98,11 @@ def _fetch_filter(
         index=pd.DatetimeIndex([dt for dt, _ in rows], tz="UTC"),
         name=col_name,
     )
-    # SMARD is 15-min; resample to hourly mean for prices, sum for energy
-    agg = "mean" if "eur" in col_name else "sum"
-    return s.resample("h").agg(agg)
+    # SMARD is 15-min; resample to hourly — mean for prices, sum for energy.
+    # min_count=1 so an hour with no readings stays NaN rather than summing to a
+    # plausible-looking 0 MWh that no downstream check would question.
+    resampled = s.resample("h")
+    return resampled.mean() if "eur" in col_name else resampled.sum(min_count=1)
 
 
 def fetch_dataset(start: str, end: str) -> pd.DataFrame:

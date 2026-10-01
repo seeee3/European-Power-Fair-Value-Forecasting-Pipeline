@@ -116,6 +116,13 @@ def _execute_rule(df: pd.DataFrame, rule: dict[str, Any]) -> dict[str, Any]:
             return result
 
         s = df[col].dropna()  # noqa: F841  (used in eval)
+        if s.empty:
+            # An empty column vacuously satisfies every rule. Reporting that as
+            # a pass is worse than not checking at all, because it looks like
+            # assurance. This is how a fully-NaN series got a clean QA report.
+            result["status"] = "skipped"
+            result["error"] = f"Column '{col}' has no non-null values to check"
+            return result
         mask = eval(expr)  # noqa: S307 — controlled LLM output, logged
         if not isinstance(mask, pd.Series):
             mask = pd.Series([bool(mask)] * len(s), index=s.index)

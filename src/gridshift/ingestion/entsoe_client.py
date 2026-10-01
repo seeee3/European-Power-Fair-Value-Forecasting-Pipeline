@@ -144,21 +144,27 @@ class EntsoEClient:
         return self._parse_xml_timeseries(xml, col)
 
 
-def _year_chunks(start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+def _month_chunks(start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
     """
-    Split [start, end] into chunks of at most 1 year (365 days).
-    ENTSO-E rejects requests spanning more than one year per call.
+    Split [start, end] into calendar-month chunks.
+
+    ENTSO-E caps A65 (load) and A75 (generation per type) at one month per
+    request and answers anything longer with HTTP 400:
+    "Provided time interval is larger than maximum allowed period 'P1M'".
+    An earlier version chunked by year, so every load and generation request
+    failed, the failure was caught and turned into an empty Series, and the
+    dataset came back with price only. Prices (A44) do allow a year, but there
+    is no reason to keep two chunking schemes.
+
+    `periodEnd` is exclusive, so each chunk ends *at* the next month boundary
+    rather than an hour before it. Ending an hour early instead drops the last
+    hour of every month: 48 hours across four years, small enough to pass a
+    missingness check and still leave a gap in the series.
     """
-    chunks = []
-    cursor = start
-    while cursor < end:
-        chunk_end = min(
-            datetime(cursor.year + 1, 1, 1, tzinfo=cursor.tzinfo) - pd.Timedelta(hours=1),
-            end,
-        )
-        chunks.append((cursor, chunk_end))
-        cursor = datetime(cursor.year + 1, 1, 1, tzinfo=cursor.tzinfo)
-    return chunks
+    last = end + pd.Timedelta(hours=1)
+    bounds = pd.date_range(start, last, freq="MS", tz=start.tzinfo)
+    edges = [start, *[b.to_pydatetime() for b in bounds if start < b.to_pydatetime() < last], last]
+    return [(a, b) for a, b in zip(edges, edges[1:]) if a < b]
 
 
 def _fetch_chunked(
@@ -167,9 +173,9 @@ def _fetch_chunked(
     end: datetime,
     col: str,
 ) -> pd.Series:
-    """Call `fn(chunk_start, chunk_end)` for each annual chunk and concatenate."""
+    """Call `fn(chunk_start, chunk_end)` for each monthly chunk and concatenate."""
     parts: list[pd.Series] = []
-    for chunk_start, chunk_end in _year_chunks(start, end):
+    for chunk_start, chunk_end in _month_chunks(start, end):
         logger.info("  chunk %s → %s", chunk_start.date(), chunk_end.date())
         try:
             part = fn(chunk_start, chunk_end)
@@ -186,7 +192,8 @@ def _fetch_chunked(
 def fetch_dataset(api_key: str, start: str, end: str) -> pd.DataFrame:
     """
     Fetch all required ENTSO-E series and return a merged hourly DataFrame.
-    Requests are split into annual chunks — the API rejects ranges > 1 year.
+    Requests are split into calendar-month chunks — the API rejects ranges > 1 month
+    for load and generation documents.
     """
     client = EntsoEClient(api_key)
     start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
@@ -194,29 +201,29 @@ def fetch_dataset(api_key: str, start: str, end: str) -> pd.DataFrame:
 
     series: dict[str, pd.Series] = {}
 
-    logger.info("Fetching ENTSO-E day-ahead prices (DE-LU) in annual chunks")
+    logger.info("Fetching ENTSO-E day-ahead prices (DE-LU) in monthly chunks")
     series["price_da_eur_mwh"] = _fetch_chunked(
         client.day_ahead_prices, start_dt, end_dt, "price_da_eur_mwh"
     )
 
-    logger.info("Fetching ENTSO-E actual load in annual chunks")
+    logger.info("Fetching ENTSO-E actual load in monthly chunks")
     series["load_mwh"] = _fetch_chunked(
         client.actual_load, start_dt, end_dt, "load_mwh"
     )
 
-    logger.info("Fetching ENTSO-E wind onshore generation in annual chunks")
+    logger.info("Fetching ENTSO-E wind onshore generation in monthly chunks")
     series["wind_onshore_mwh"] = _fetch_chunked(
         lambda s, e: client.actual_generation_by_type(s, e, "B19", "wind_onshore_mwh"),
         start_dt, end_dt, "wind_onshore_mwh",
     )
 
-    logger.info("Fetching ENTSO-E wind offshore generation in annual chunks")
+    logger.info("Fetching ENTSO-E wind offshore generation in monthly chunks")
     series["wind_offshore_mwh"] = _fetch_chunked(
         lambda s, e: client.actual_generation_by_type(s, e, "B18", "wind_offshore_mwh"),
         start_dt, end_dt, "wind_offshore_mwh",
     )
 
-    logger.info("Fetching ENTSO-E solar generation in annual chunks")
+    logger.info("Fetching ENTSO-E solar generation in monthly chunks")
     series["solar_mwh"] = _fetch_chunked(
         lambda s, e: client.actual_generation_by_type(s, e, "B16", "solar_mwh"),
         start_dt, end_dt, "solar_mwh",

@@ -3,14 +3,14 @@
   "period": "2025-10-01 \u2192 2026-01-01",
   "price_carbon_link": {
     "status": "ok",
-    "n_hours": 2208,
-    "pearson_r": 0.739,
-    "spearman_r": 0.812,
-    "mean_intensity_cheapest_tercile_t_per_mwh": 0.203,
-    "mean_intensity_priciest_tercile_t_per_mwh": 0.45,
-    "intensity_gap_t_per_mwh": 0.247,
-    "mean_renewable_share_cheapest_tercile": 0.661,
-    "mean_renewable_share_priciest_tercile": 0.249
+    "n_hours": 2207,
+    "pearson_r": 0.693,
+    "spearman_r": 0.74,
+    "mean_intensity_cheapest_tercile_t_per_mwh": 0.206,
+    "mean_intensity_priciest_tercile_t_per_mwh": 0.43,
+    "intensity_gap_t_per_mwh": 0.224,
+    "mean_renewable_share_cheapest_tercile": 0.657,
+    "mean_renewable_share_priciest_tercile": 0.284
   },
   "green_window": {
     "local_hours": [
@@ -20,12 +20,13 @@
       3,
       4,
       5,
+      12,
       23
     ],
     "n_hours": 736,
-    "mean_price_eur_mwh": 62.39,
-    "mean_renewable_share": 0.475,
-    "mean_intensity_t_per_mwh": 0.315
+    "mean_price_eur_mwh": 64.2,
+    "mean_renewable_share": 0.487,
+    "mean_intensity_t_per_mwh": 0.308
   },
   "red_window": {
     "local_hours": [
@@ -40,21 +41,21 @@
       20
     ],
     "n_hours": 735,
-    "mean_price_eur_mwh": 121.02,
-    "mean_renewable_share": 0.365,
-    "mean_intensity_t_per_mwh": 0.381
+    "mean_price_eur_mwh": 127.84,
+    "mean_renewable_share": 0.418,
+    "mean_intensity_t_per_mwh": 0.349
   },
   "impact_per_mwh_shifted": {
-    "cost_saving_eur": 58.63,
-    "co2_avoided_t": 0.066,
+    "cost_saving_eur": 63.64,
+    "co2_avoided_t": 0.041,
     "assumed_residual_intensity_t_per_mwh": 0.6
   },
-  "forecast_mae_eur_mwh": 26.85,
+  "forecast_mae_eur_mwh": 28.76,
   "confidence": "high",
-  "recommendation": "Shift flexible load out of local hours [7, 8, 9, 15, 16, 17, 18, 19, 20] into local hours [0, 1, 2, 3, 4, 5, 23].",
+  "recommendation": "Shift flexible load out of local hours [7, 8, 9, 15, 16, 17, 18, 19, 20] into local hours [0, 1, 2, 3, 4, 5, 12, 23].",
   "override_conditions": [
     "Wind and solar readings are more than six hours out of date. The estimate of which hours are cleaner cannot be trusted, so keep the current schedule.",
-    "Forecasts have been off by more than 54 euros per MWh over the past month, roughly double the expected error. Stop shifting automatically until it recovers.",
+    "Forecasts have been off by more than 58 euros per MWh over the past month, roughly double the expected error. Stop shifting automatically until it recovers.",
     "Cheap hours have stopped being cleaner hours over the past month. The reasoning behind the schedule no longer holds, so revert to a fixed one.",
     "Following the schedule would breach an operating limit, such as chilled-water storage capacity, a minimum desalination output, or a vehicle that must be charged by a set time. The operating limit always wins.",
     "The grid operator has issued its own demand instruction. That always overrides this recommendation."
@@ -62,7 +63,7 @@
   "illustrative_scale_up": {
     "shiftable_mwh_per_day": 200,
     "annual_shiftable_mwh": 73000,
-    "annual_cost_saving_eur": 4279990,
-    "annual_co2_avoided_t": 4818
+    "annual_cost_saving_eur": 4645720,
+    "annual_co2_avoided_t": 2993
   }
 }
