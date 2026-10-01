@@ -6,6 +6,8 @@ __pycache__/
 # Data files (large, auto-fetched on first run)
 data/raw/*.csv
 data/raw/*.parquet
+# Pinned input: every reported number traces back to this exact file
+!data/raw/de_power_market.parquet
 data/processed/*.csv
 data/processed/*.parquet
 .venv/
